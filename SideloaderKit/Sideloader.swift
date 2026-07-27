@@ -364,9 +364,9 @@ public struct Sideloader {
 
     /// The prebuilt beacon dylib injected into every app we install.
     static func beaconDylibPath() -> String {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/BeaconInject.dylib.bin").path
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/beacon_payload.dat").path
         if FileManager.default.isReadableFile(atPath: bundled) { return bundled }
-        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/BeaconInject.dylib.bin").expandingTildeInPath  // dev fallback
+        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/beacon_payload.dat").expandingTildeInPath  // dev fallback
     }
 
     /// This Mac's own LAN IPv4 on the interface that would reach `facing` (the

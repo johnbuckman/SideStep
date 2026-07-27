@@ -11,8 +11,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 IDENTITY="${ISIDELOAD_IDENTITY:-Developer ID Application: Vid Tadel (XLS3XF57J8)}"
-VERSION="0.2"
-LABEL="0.2 alpha"
+VERSION="0.3"
+LABEL="0.3 alpha"
 OUT="${1:-./dist}"
 ENT="$PWD/iSideload.entitlements"
 
@@ -29,7 +29,7 @@ cp -R "$BINDIR/OpenSSL.framework" "$APP/Contents/MacOS/OpenSSL.framework"
 [ -f /Users/john/altstore-fork/AppIcon.icns ] && cp /Users/john/altstore-fork/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp -R Helpers/idevice "$APP/Contents/Helpers/idevice"
 # prebuilt iOS beacon dylib injected into every app we install
-cp Helpers/BeaconInject.dylib.bin "$APP/Contents/Helpers/BeaconInject.dylib.bin"
+cp Helpers/beacon_payload.dat "$APP/Contents/Resources/beacon_payload.dat"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
