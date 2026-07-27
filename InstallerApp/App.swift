@@ -65,6 +65,19 @@ func installDiagnosticsLog() {
 struct DeviceOption: Identifiable { let udid: String; let name: String; var id: String { udid } }
 enum InstallKind { case ipa(String), source(SourceApp) }
 
+/// Enables only .ipa / .app in the open panel, plus plain folders so the user
+/// can still navigate. Extension-based so it does not depend on LaunchServices
+/// having classified a file as the dynamic "ipa" UTType.
+final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
+    func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if ext == "ipa" || ext == "app" { return true }
+        let vals = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+        // plain (non-package) directories stay selectable so navigation works
+        return (vals?.isDirectory ?? false) && !(vals?.isPackage ?? false)
+    }
+}
+
 @MainActor final class AppModel: ObservableObject {
     // accounts
     @Published var accounts: [AccountRecord] = AccountStore.records()
@@ -151,14 +164,24 @@ enum InstallKind { case ipa(String), source(SourceApp) }
             catch { status = "Couldn't load source: \(error.localizedDescription)" }
         }
     }
+    /// Keeps the open-panel delegate alive for the duration of the panel
+    /// (NSOpenPanel.delegate is weak).
+    private var ipaPanelDelegate: IPAPanelDelegate?
+
     func pickIPA() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = true; panel.canChooseFiles = true
-        var types = [UTType.application]
-        if let ipa = UTType(filenameExtension: "ipa") { types.insert(ipa, at: 0) }
-        panel.allowedContentTypes = types
+        // Filter by extension via a delegate rather than allowedContentTypes:
+        // `UTType(filenameExtension: "ipa")` yields a *dynamic* type, and files
+        // LaunchServices has already cached as generic data/zip don't match it,
+        // so .ipa files show up greyed out until the directory is re-enumerated
+        // (navigate away and back). Matching on the extension is deterministic.
+        let delegate = IPAPanelDelegate()
+        ipaPanelDelegate = delegate
+        panel.delegate = delegate
         panel.prompt = "Install"
+        defer { ipaPanelDelegate = nil }
         if panel.runModal() == .OK, let url = panel.url { openIPA(url.path) }
     }
     func pickJSON() {
@@ -720,6 +743,8 @@ struct InstallerApp: App {
     init() {
         installDiagnosticsLog()
         RefreshDaemon.shared.start()
+        // Listen for on-device beacons and push updates over Wi-Fi.
+        BeaconListener.shared.start(log: { print("[iSideload beacon] \($0)") })
         Sideloader.populateTeamsInBackground()   // so the team picker is ready + refresh honors the choice
         // Launch at login is ON by default — register once on first run; the Settings
         // toggle can turn it off afterwards (we don't re-enable once configured).

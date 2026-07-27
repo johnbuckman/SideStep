@@ -28,6 +28,8 @@ cp -R "$BINDIR/OpenSSL.framework" "$APP/Contents/MacOS/OpenSSL.framework"
 [ -f icon/AppIcon.icns ] && cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 [ -f /Users/john/altstore-fork/AppIcon.icns ] && cp /Users/john/altstore-fork/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp -R Helpers/idevice "$APP/Contents/Helpers/idevice"
+# prebuilt iOS beacon dylib injected into every app we install
+cp Helpers/BeaconInject.dylib.bin "$APP/Contents/Helpers/BeaconInject.dylib.bin"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,6 +57,8 @@ echo "==> Signing nested code (deepest first) with: $IDENTITY"
 for dylib in "$APP"/Contents/Helpers/idevice/*.dylib; do SIGN "$dylib"; done
 # the device helper executable
 SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevicehelper"
+# the direct-IP installer (heartbeat + sync); loads the bundled dylibs via @rpath
+SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevice_ipinstall"
 # OpenSSL framework linked by the app
 SIGN "$APP/Contents/MacOS/OpenSSL.framework/Versions/A/OpenSSL"
 SIGN "$APP/Contents/MacOS/OpenSSL.framework"

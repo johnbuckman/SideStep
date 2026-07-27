@@ -319,6 +319,28 @@ public struct Sideloader {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
+    /// Like run(), but delivers each output line to `onLine` as it arrives (so
+    /// progress can be forwarded live). Returns the full combined output.
+    static func runStreaming(_ tool: String, _ args: [String], cwd: URL? = nil, onLine: (String) -> Void) throws -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tool); p.arguments = args
+        if let cwd { p.currentDirectoryURL = cwd }
+        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+        let h = pipe.fileHandleForReading
+        try p.run()
+        var full = "", buf = ""
+        while case let d = h.availableData, !d.isEmpty {
+            let s = String(decoding: d, as: UTF8.self); full += s; buf += s
+            while let nl = buf.firstIndex(of: "\n") {
+                let line = String(buf[..<nl]); buf.removeSubrange(...nl)
+                if !line.isEmpty { onLine(line) }
+            }
+        }
+        if !buf.isEmpty { onLine(buf) }
+        p.waitUntilExit()
+        return full
+    }
+
     static func plistValue(_ key: String, _ plistPath: String) -> String? {
         (try? run("/usr/libexec/PlistBuddy", ["-c", "Print :\(key)", plistPath]))?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -331,6 +353,42 @@ public struct Sideloader {
         let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice/idevicehelper").path
         if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
         return NSString(string: "~/altstore-fork/imd/dist/idevice/idevicehelper").expandingTildeInPath  // dev fallback
+    }
+
+    static func ipInstallPath() -> String {
+        if let p = ProcessInfo.processInfo.environment["IWISH_IPINSTALL"], !p.isEmpty { return p }
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice/idevice_ipinstall").path
+        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
+        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/idevice/idevice_ipinstall").expandingTildeInPath  // dev fallback (heartbeat+sync)
+    }
+
+    /// The prebuilt beacon dylib injected into every app we install.
+    static func beaconDylibPath() -> String {
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/BeaconInject.dylib.bin").path
+        if FileManager.default.isReadableFile(atPath: bundled) { return bundled }
+        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/BeaconInject.dylib.bin").expandingTildeInPath  // dev fallback
+    }
+
+    /// This Mac's own LAN IPv4 on the interface that would reach `facing` (the
+    /// device IP), via the connected-UDP-socket getsockname trick. The beacon
+    /// unicasts to this as its fast path; broadcast + Bonjour cover IP changes.
+    static func localIPv4(facing: String?) -> String {
+        let target = (facing?.isEmpty == false ? facing! : "8.8.8.8")
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        if fd < 0 { return "" }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = (53 as in_port_t).bigEndian
+        inet_pton(AF_INET, target, &addr.sin_addr)
+        let cr = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        if cr != 0 { return "" }
+        var local = sockaddr_in(); var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let gr = withUnsafeMutablePointer(to: &local) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) } }
+        if gr != 0 { return "" }
+        var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        inet_ntop(AF_INET, &local.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN))
+        return String(cString: buf)
     }
 
     /// Connected iOS devices as (udid, name). Empty if none / tooling missing.
@@ -497,6 +555,16 @@ public struct Sideloader {
         log("Signing \(displayName)… (profile exp \(profile.expirationDate))")
 
         try run("/usr/libexec/PlistBuddy", ["-c", "Set :CFBundleIdentifier \(bundleID)", plist])
+
+        // Instrument with the wireless self-updater (best-effort) BEFORE signing,
+        // so zsign covers the injected dylib. Disable with IWISH_NO_BEACON.
+        if ProcessInfo.processInfo.environment["IWISH_NO_BEACON"] == nil {
+            let macIP = localIPv4(facing: ProcessInfo.processInfo.environment["IWISH_IP"])
+            BeaconInjector.instrument(appDir: appCopy, dylibSource: beaconDylibPath(),
+                                      macIP: macIP, udid: iPadUDID, bundleID: bundleID,
+                                      updateInterval: team.type == .free ? 86400 : 7 * 86400, log: log)
+        }
+
         let signer = ALTSigner(team: team, certificate: cert)
         _ = try await withCheckedThrowingContinuation { (c: CheckedContinuation<Bool, Error>) in
             _ = signer.signApp(at: appCopy, provisioningProfiles: [profile]) { ok, e in ok ? c.resume(returning: true) : c.resume(throwing: e ?? SideErr.fail("signApp")) }
@@ -508,10 +576,25 @@ public struct Sideloader {
         try fm.moveItem(at: appCopy, to: payload.appendingPathComponent("\(sanitize(displayName)).app"))
         let ipa = work.appendingPathComponent("out.ipa")
         try run("/usr/bin/zip", ["-qXr9", ipa.path, "Payload"], cwd: work)
+        // Debug aid: keep a copy of the signed IPA for inspection.
+        if let keep = ProcessInfo.processInfo.environment["IWISH_KEEP_IPA"], !keep.isEmpty {
+            try? fm.removeItem(atPath: keep)
+            try? fm.copyItem(at: ipa, to: URL(fileURLWithPath: keep))
+            log("kept signed ipa at \(keep)")
+        }
 
-        let out = try run(helperPath(), ["install", iPadUDID, ipa.path], cwd: work)
-        log("install: \(out.split(separator: "\n").last.map(String.init) ?? out)")
-        guard out.contains("INSTALL OK") else { throw SideErr.fail("install failed: \(out.suffix(160))") }
+        let out: String
+        if let ip = ProcessInfo.processInfo.environment["IWISH_IP"], !ip.isEmpty {
+            // Direct-IP install: connect straight to the device's IP (which the
+            // on-device beacon supplies), bypassing usbmux's flaky Bonjour discovery.
+            log("Installing by direct IP \(ip)…")
+            out = try runStreaming(ipInstallPath(), [iPadUDID, ip, ipa.path], cwd: work, onLine: { log($0) })
+            guard out.contains("DIRECT-IP INSTALL OK") else { throw SideErr.fail("ip install failed: \(out.suffix(200))") }
+        } else {
+            out = try run(helperPath(), ["install", iPadUDID, ipa.path], cwd: work)
+            log("install: \(out.split(separator: "\n").last.map(String.init) ?? out)")
+            guard out.contains("INSTALL OK") else { throw SideErr.fail("install failed: \(out.suffix(160))") }
+        }
 
         let deviceName = connectedDevices().first(where: { $0.udid == iPadUDID })?.name ?? ""
         Tracked.upsert(TrackedApp(name: displayName, origBundleID: origBundleID, source: cachePath,

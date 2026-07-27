@@ -56,6 +56,12 @@ if args.contains("--getudid") {
     } catch { errln(">>> UDID host failed: \(error)"); exit(1) }
 }
 
+if args.contains("--listen") {
+    BeaconListener.shared.start(log: { errln("· \($0)") })
+    errln(">>> beacon listener running on udp/\(BeaconListener.port) — open an instrumented app on the device")
+    RunLoop.main.run()
+}
+
 if args.contains("--refresh") {
     Task {
         do { try await Sideloader.refreshAll(log: { errln("· \($0)") }); errln(">>> refresh done") }
@@ -63,6 +69,16 @@ if args.contains("--refresh") {
         sem.signal()
     }
     sem.wait(); exit(0)
+}
+
+// Install an arbitrary local .app (used for the beacon; pairs with IWISH_IP).
+if let i = args.firstIndex(of: "--app"), i + 1 < args.count {
+    let appPath = args[i + 1]
+    withSaved { account, session in
+        do { errln(">>> " + (try await Sideloader.install(account: account, session: session, appPath: appPath, source: appPath, iPadUDID: udid, log: { errln("· \($0)") }))) }
+        catch { errln(">>> FAILED: \(error)") }
+    }
+    exit(0)
 }
 
 if args.contains("--install") {
