@@ -41,6 +41,8 @@ static int g_updateSec    = 86400;         // beacon if the profile is older tha
 static int g_fgSec        = 1800;          // re-check every 30 min while the app is open
 
 static NSString *g_bonjourIP = nil;        // filled in async by the Bonjour browser
+static NSString *g_foundVia = @"";         // how SideStep found this app (repo/url/file)
+static BOOL      g_autoUpdates = NO;        // YES = SideStep pushes new versions
 static NSDate   *g_lastBeaconAt = nil;
 static int       g_beaconCount = 0;
 static NSString *g_lastReason = @"(none yet)";
@@ -55,6 +57,8 @@ static void loadConfig(void) {
     if (c[@"port"])            g_port = [c[@"port"] intValue];
     if (c[@"update_interval"]) g_updateSec = [c[@"update_interval"] intValue];
     if (c[@"foreground_check"])g_fgSec = [c[@"foreground_check"] intValue];
+    if (c[@"found_via"])       g_foundVia = c[@"found_via"];
+    if (c[@"auto_updates"])    g_autoUpdates = [c[@"auto_updates"] boolValue];
     if (g_bundle.length == 0)  g_bundle = NSBundle.mainBundle.bundleIdentifier ?: @"";
 }
 
@@ -244,12 +248,14 @@ static NSString *vitalsText(void) {
     BOOL stale = ageS > g_updateSec;
     return [NSString stringWithFormat:
         @"APP\n  %@  v%@ (%@)\n  %@\n\n"
+        @"SOURCE\n  found via: %@\n  %@\n\n"
         @"SIGNING PROFILE\n  team:     %@\n  profile:  %@\n  devices:  %d provisioned\n"
         @"  updated:  %@  (%@)\n  expires:  %@\n  in:       %.1f days\n\n"
         @"UPDATER\n  interval: %d s\n  status:   %@\n  last chk: %@\n  beacons:  %d sent, last %@\n\n"
         @"DISCOVERY (Mac)\n  baked IP: %@ : %d\n  bonjour:  %@\n  unlocked: %@",
         info[@"CFBundleDisplayName"] ?: @"?", info[@"CFBundleShortVersionString"] ?: @"?", info[@"CFBundleVersion"] ?: @"?",
         info[@"CFBundleIdentifier"] ?: @"?",
+        g_foundVia.length ? g_foundVia : @"(unknown)", g_autoUpdates ? @"(app keeps up to date)" : @"(one-time install)",
         prof[@"TeamName"] ?: @"?", prof[@"Name"] ?: @"?", (int)[prof[@"ProvisionedDevices"] count],
         fmtDate(created), fmtAgo(created), fmtDate(expires), expS/86400.0,
         g_updateSec, stale ? @"STALE → will beacon" : @"fresh", g_lastReason,

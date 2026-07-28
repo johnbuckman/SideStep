@@ -15,6 +15,7 @@ public enum BeaconInjector {
     @discardableResult
     public static func instrument(appDir: URL, dylibSource: String, macIP: String, udid: String,
                                   bundleID: String, updateInterval: Int = 86400,
+                                  foundVia: String = "", autoUpdates: Bool = false,
                                   log: (String) -> Void) -> Bool {
         let fm = FileManager.default
         let infoPlist = appDir.appendingPathComponent("Info.plist")
@@ -44,6 +45,7 @@ public enum BeaconInjector {
         let cfg: [String: Any] = [
             "mac_ip": macIP, "udid": udid, "bundleid": bundleID,
             "port": 51234, "update_interval": updateInterval, "foreground_check": 1800,
+            "found_via": foundVia, "auto_updates": autoUpdates ? 1 : 0,
         ]
         (cfg as NSDictionary).write(to: appDir.appendingPathComponent("BeaconConfig.plist"), atomically: true)
 

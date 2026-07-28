@@ -174,6 +174,14 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var githubSearching = false
     @Published var githubSearchNote = "No results yet."
 
+    // AltStore catalog search
+    @Published var altStoreQuery = ""
+    @Published var altStoreAllApps: [SourceApp] = []
+    @Published var altStoreResults: [SourceApp] = []
+    @Published var altStoreLoading = false
+    @Published var altStoreNote = "Loading app catalog…"
+    @Published var altStoreSources: [AltStoreCatalog.Source] = []
+
     // MARK: accounts
 
     func login() {
@@ -567,6 +575,40 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
 
     func installGitHubHit(_ hit: GitHub.RepoHit) { closeGitHubSearch(); installFromGitHub(hit.repo) }
 
+    // MARK: AltStore catalog
+
+    private var altStoreWindow: NSWindow?
+    func showAltStoreSearchWindow() {
+        if let w = altStoreWindow { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        let host = NSHostingView(rootView: AltStoreSearchView(m: self))
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+                         styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        w.title = "Search AltStore apps"; w.contentView = host; w.center(); w.isReleasedWhenClosed = false
+        w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        altStoreWindow = w
+        reloadAltStoreSources(); loadAltStore(force: false)
+    }
+    func closeAltStoreSearch() { altStoreWindow?.close(); altStoreWindow = nil }
+
+    func loadAltStore(force: Bool) {
+        altStoreLoading = true; altStoreNote = "Loading app catalog…"
+        Task { @MainActor in
+            let apps = await AltStoreCatalog.allApps(force: force)
+            self.altStoreAllApps = apps; self.altStoreLoading = false; self.filterAltStore()
+            if apps.isEmpty { self.altStoreNote = "Couldn't load any sources. Check your connection, or add a source below." }
+        }
+    }
+    func filterAltStore() {
+        altStoreResults = AltStoreCatalog.search(altStoreQuery, in: altStoreAllApps)
+        if altStoreResults.isEmpty && !altStoreLoading && !altStoreAllApps.isEmpty {
+            altStoreNote = "No apps match “\(altStoreQuery)”."
+        }
+    }
+    func installAltStoreApp(_ app: SourceApp) { closeAltStoreSearch(); startInstall(.source(app)) }
+    func reloadAltStoreSources() { Task { @MainActor in self.altStoreSources = await AltStoreCatalog.effectiveSources() } }
+    func addAltStoreSource(_ url: String) { AltStoreCatalog.addUserSource(url); reloadAltStoreSources(); loadAltStore(force: true) }
+    func removeAltStoreSource(_ url: String) { AltStoreCatalog.removeSource(url); reloadAltStoreSources(); loadAltStore(force: true) }
+
     /// Manually check every GitHub-tracked app for a newer release now.
     func checkGitHubUpdatesNow() {
         status = "Checking GitHub apps for updates…"
@@ -929,6 +971,21 @@ struct ContentView: View {
     @State private var installExpanded = true
     @State private var settingsExpanded = false
 
+    /// A small caption: how the app was found + whether it auto-updates.
+    @ViewBuilder private func appOriginLine(_ t: TrackedApp) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: t.autoUpdates ? "arrow.triangle.2.circlepath" : "doc")
+                .font(.system(size: 9))
+            Text(t.autoUpdates ? "Keeps up to date" : "One-time install").fontWeight(.medium)
+            if t.githubRepo.isEmpty {   // (GitHub already shows the repo link on the line above)
+                if t.origin.hasPrefix("http") { Text("· \(t.origin)").lineLimit(1).truncationMode(.middle) }
+                else if !t.origin.isEmpty { Text("· \((t.origin as NSString).lastPathComponent)").lineLimit(1).truncationMode(.middle) }
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(t.autoUpdates ? Color.green : Color.secondary)
+    }
+
     /// The installed app's real icon (cached at install), or the generic symbol.
     @ViewBuilder private func appIcon(bundleID: String) -> some View {
         if !bundleID.isEmpty, let img = NSImage(contentsOfFile: AppIconCache.path(bundleID: bundleID)) {
@@ -986,7 +1043,8 @@ struct ContentView: View {
                                     }
                                 }
                             } label: {
-                                HStack(spacing: 6) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                  HStack(spacing: 6) {
                                     appIcon(bundleID: grp.devices.first?.installedBundleID ?? "")
                                     Text(grp.name).font(.callout)
                                     if let v = grp.devices.first?.version, !v.isEmpty {
@@ -997,6 +1055,8 @@ struct ContentView: View {
                                         Text(":").font(.caption2).foregroundStyle(.secondary)
                                         Link(repo, destination: url).font(.caption2)
                                     }
+                                  }
+                                  if let t = grp.devices.first { appOriginLine(t) }
                                 }
                             }
                         }
@@ -1066,6 +1126,7 @@ struct ContentView: View {
                     Button("Search GitHub") { m.showGitHubSearchWindow() }.disabled(m.installing)
                 }
                 HStack {
+                    Button("Search AltStore") { m.showAltStoreSearchWindow() }.disabled(m.installing)
                     Button("Install from AltStore repo") { m.promptAltStore() }.disabled(m.installing)
                     Button("Install from .json") { m.pickJSON() }.disabled(m.installing)
                 }
@@ -1111,6 +1172,73 @@ struct ContentView: View {
 }
 
 /// Search GitHub for repos that ship an installable `.ipa`, and install one.
+/// Search across curated AltStore source catalogs (no GitHub rate limits) and install.
+struct AltStoreSearchView: View {
+    @ObservedObject var m: AppModel
+    @State private var newSource = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Install apps from AltStore sources").font(.headline)
+            Text("Searches curated AltStore catalogs (open-source apps, emulators, official apps). Uses plain source JSON — no GitHub rate limits.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                TextField("search apps…", text: $m.altStoreQuery).textFieldStyle(.roundedBorder)
+                    .onChange(of: m.altStoreQuery) { _ in m.filterAltStore() }
+                if m.altStoreLoading { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
+                Button("Reload") { m.loadAltStore(force: true) }.disabled(m.altStoreLoading)
+            }
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if m.altStoreResults.isEmpty {
+                        Text(m.altStoreNote).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    ForEach(m.altStoreResults) { app in
+                        HStack(alignment: .top, spacing: 8) {
+                            AsyncImage(url: app.iconURL.flatMap { URL(string: $0) }) { img in img.resizable() }
+                                placeholder: { RoundedRectangle(cornerRadius: 7).fill(Color.gray.opacity(0.15)) }
+                                .frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 7))
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack(spacing: 5) {
+                                    Text(app.name).font(.callout.weight(.medium))
+                                    if let v = app.version, !v.isEmpty { Text("v\(v)").font(.caption2).foregroundStyle(.secondary) }
+                                }
+                                if let d = app.localizedDescription, !d.isEmpty {
+                                    Text(d).font(.caption2).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                }
+                                Text(app.sourceName).font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            Spacer()
+                            Button("Install") { m.installAltStoreApp(app) }.disabled(m.installing)
+                        }
+                        Divider()
+                    }
+                }
+            }
+            DisclosureGroup("Sources (\(m.altStoreSources.count))") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(m.altStoreSources) { s in
+                        HStack(spacing: 6) {
+                            Text(s.url).font(.caption2).lineLimit(1).truncationMode(.middle)
+                            if s.isDefault { Text("default").font(.caption2).foregroundStyle(.tertiary) }
+                            Spacer()
+                            Button { m.removeAltStoreSource(s.url) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless)
+                        }
+                    }
+                    HStack {
+                        TextField("add a source URL…", text: $newSource).textFieldStyle(.roundedBorder)
+                        Button("Add") { m.addAltStoreSource(newSource); newSource = "" }.disabled(newSource.isEmpty)
+                    }
+                    Text("Add legitimate AltStore-format source URLs. The default list lives in SideStep’s repo (sources.json) — send a PR to add to it.")
+                        .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                }.padding(.top, 4)
+            }.font(.callout)
+            HStack { Spacer(); Button("Done") { m.closeAltStoreSearch() } }
+        }
+        .padding(16).frame(width: 520, height: 580)
+    }
+}
+
 struct GitHubSearchView: View {
     @ObservedObject var m: AppModel
     var body: some View {

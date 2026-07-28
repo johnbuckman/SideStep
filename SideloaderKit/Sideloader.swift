@@ -232,17 +232,41 @@ public enum CertStore {
 
 // MARK: - AltStore-format source + tracked apps
 
-public struct SourceApp: Codable, Identifiable, Sendable {
+public struct SourceApp: Decodable, Identifiable, Sendable {
     public var name: String
     public var bundleIdentifier: String
     public var downloadURL: String
     public var version: String?
     public var localizedDescription: String?
     public var iconURL: String?
+    public var developerName: String?
+    public var sourceName: String = ""   // which source it came from (set by the catalog)
     public var id: String { bundleIdentifier }
-    enum CodingKeys: String, CodingKey { case name, bundleIdentifier, downloadURL, version, localizedDescription, iconURL }
+
+    enum CodingKeys: String, CodingKey { case name, bundleIdentifier, downloadURL, version, versions, localizedDescription, iconURL, developerName }
+    struct Ver: Decodable { var downloadURL: String?; var version: String? }
+
+    public init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        bundleIdentifier = (try? c.decode(String.self, forKey: .bundleIdentifier)) ?? ""
+        localizedDescription = try? c.decode(String.self, forKey: .localizedDescription)
+        iconURL = try? c.decode(String.self, forKey: .iconURL)
+        developerName = try? c.decode(String.self, forKey: .developerName)
+        // v1 has top-level downloadURL/version; v2 nests them under versions[0].
+        let versions = (try? c.decode([Ver].self, forKey: .versions)) ?? []
+        downloadURL = (try? c.decode(String.self, forKey: .downloadURL)) ?? versions.first?.downloadURL ?? ""
+        version = (try? c.decode(String.self, forKey: .version)) ?? versions.first?.version
+    }
+    // Manual init so the catalog can stamp sourceName.
+    public init(name: String, bundleIdentifier: String, downloadURL: String, version: String?,
+                localizedDescription: String?, iconURL: String?, developerName: String?, sourceName: String) {
+        self.name = name; self.bundleIdentifier = bundleIdentifier; self.downloadURL = downloadURL
+        self.version = version; self.localizedDescription = localizedDescription; self.iconURL = iconURL
+        self.developerName = developerName; self.sourceName = sourceName
+    }
 }
-struct AltSource: Codable { var name: String?; var apps: [SourceApp] }
+struct AltSource: Decodable { var name: String?; var apps: [SourceApp] }
 
 public struct TrackedApp: Codable, Identifiable {
     public var name: String
@@ -258,7 +282,20 @@ public struct TrackedApp: Codable, Identifiable {
     public var version: String = ""           // the app's CFBundleShortVersionString
     public var githubRepo: String = ""        // "owner/name" if installed from GitHub Releases
     public var githubTag: String = ""         // the release tag of the currently-installed build
+    public var origin: String = ""            // how it was found: an http source URL, or the .ipa path
     public var id: String { installedBundleID + "@" + udid }
+
+    /// True when SideStep will fetch NEW versions for this app (GitHub repo or an
+    /// AltStore/http source). A plain local .ipa is a one-time install (re-signed to
+    /// stay alive, but the content never changes).
+    public var autoUpdates: Bool { !githubRepo.isEmpty || origin.hasPrefix("http") }
+    /// Human-readable "how this app was found", for the UI + the on-device overlay.
+    public var foundVia: String {
+        if !githubRepo.isEmpty { return "GitHub — \(githubRepo)" }
+        if origin.hasPrefix("http") { return "AltStore — \(origin)" }
+        if !origin.isEmpty { return "File — \((origin as NSString).lastPathComponent)" }
+        return "File"
+    }
     /// Seconds until the provisioning profile expires (negative = expired).
     public var secondsUntilExpiry: Double? {
         guard let li = lastInstalled else { return nil }
@@ -268,7 +305,7 @@ public struct TrackedApp: Codable, Identifiable {
 
 extension TrackedApp {
     // Lenient decode so entries written before the newer fields still load.
-    enum CodingKeys: String, CodingKey { case name, origBundleID, source, installedBundleID, appleID, udid, deviceName, validityDays, appIDIdentifier, lastInstalled, version, githubRepo, githubTag }
+    enum CodingKeys: String, CodingKey { case name, origBundleID, source, installedBundleID, appleID, udid, deviceName, validityDays, appIDIdentifier, lastInstalled, version, githubRepo, githubTag, origin }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
@@ -284,6 +321,7 @@ extension TrackedApp {
         version = try c.decodeIfPresent(String.self, forKey: .version) ?? ""
         githubRepo = try c.decodeIfPresent(String.self, forKey: .githubRepo) ?? ""
         githubTag = try c.decodeIfPresent(String.self, forKey: .githubTag) ?? ""
+        origin = try c.decodeIfPresent(String.self, forKey: .origin) ?? ""
     }
 }
 
@@ -636,9 +674,15 @@ public struct Sideloader {
         // so zsign covers the injected dylib. Disable with IWISH_NO_BEACON.
         if ProcessInfo.processInfo.environment["IWISH_NO_BEACON"] == nil {
             let macIP = localIPv4(facing: ProcessInfo.processInfo.environment["IWISH_IP"])
+            // "how found" + update mode, for the on-device overlay.
+            let via: String = github.map { "GitHub — \($0.repo)" }
+                ?? (source.hasPrefix("http") ? "AltStore — \(source)"
+                    : (source.isEmpty ? "File" : "File — \((source as NSString).lastPathComponent)"))
+            let auto = github != nil || source.hasPrefix("http")
             BeaconInjector.instrument(appDir: appCopy, dylibSource: beaconDylibPath(),
                                       macIP: macIP, udid: iPadUDID, bundleID: bundleID,
-                                      updateInterval: team.type == .free ? 86400 : 7 * 86400, log: log)
+                                      updateInterval: team.type == .free ? 86400 : 7 * 86400,
+                                      foundVia: via, autoUpdates: auto, log: log)
         }
 
         let signer = ALTSigner(team: team, certificate: cert)
@@ -695,10 +739,12 @@ public struct Sideloader {
                              deviceName: deviceName, validityDays: team.type == .free ? 7 : 365,
                              appIDIdentifier: appID.identifier, lastInstalled: Date().timeIntervalSince1970)
         rec.version = appVersion
+        rec.origin = source   // how it was found (http source URL, or the .ipa/.app path)
         if let github { rec.githubRepo = github.repo; rec.githubTag = github.tag }
         Tracked.upsert(rec)
         AppIconCache.extract(fromApp: cachePath, bundleID: bundleID)   // best-effort icon for the UI
         try? fm.removeItem(at: work)
+        log("found via: \(rec.foundVia) — \(rec.autoUpdates ? "app keeps up to date" : "one-time install")")
         return "✅ Installed \(displayName) (\(bundleID))."
     }
 
@@ -770,12 +816,15 @@ public struct Sideloader {
             return try await installFromIPA(account: account, session: session, filePath: ipa,
                                             iPadUDID: t.udid, github: (t.githubRepo, rel.tag), log: log)
         }
-        if t.source.hasPrefix("http") {
+        // AltStore/http source → re-download the current build from the source each time,
+        // so the app tracks the source's latest version.
+        if t.origin.hasPrefix("http") {
             let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-            let appPath = try await downloadAndUnzipApp(t.source, into: work, log: log)
-            return try await install(account: account, session: session, appPath: appPath.path, source: t.source, iPadUDID: t.udid, log: log)
+            let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log)
+            return try await install(account: account, session: session, appPath: appPath.path, source: t.origin, iPadUDID: t.udid, log: log)
         }
+        // Local .ipa/.app → re-sign the cached copy (one-time content, just kept alive).
         return try await installFromIPA(account: account, session: session, filePath: t.source, iPadUDID: t.udid, log: log)
     }
 
@@ -866,11 +915,14 @@ public struct Sideloader {
                 if udid.isEmpty { log("no device connected for \(t.name) — skipping"); continue }
                 do {
                     log("refreshing \(t.name) [\(appleID)]…")
-                    if t.source.hasPrefix("http") {
+                    if !t.githubRepo.isEmpty, let rel = await GitHub.latestIPA(repo: t.githubRepo) {
+                        let ipa = try await GitHub.downloadIPA(rel); defer { try? FileManager.default.removeItem(atPath: ipa) }
+                        _ = try await installFromIPA(account: pair.0, session: pair.1, filePath: ipa, iPadUDID: udid, github: (t.githubRepo, rel.tag), log: log)
+                    } else if t.origin.hasPrefix("http") {
                         let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
                         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-                        let appPath = try await downloadAndUnzipApp(t.source, into: work, log: log)
-                        _ = try await install(account: pair.0, session: pair.1, appPath: appPath.path, source: t.source, iPadUDID: udid, log: log)
+                        let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log)
+                        _ = try await install(account: pair.0, session: pair.1, appPath: appPath.path, source: t.origin, iPadUDID: udid, log: log)
                     } else {
                         _ = try await installFromIPA(account: pair.0, session: pair.1, filePath: t.source, iPadUDID: udid, log: log)
                     }
