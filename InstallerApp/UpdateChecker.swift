@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SideloaderKit
 
 /// In-app auto-update, ported from MacCVS's UpdateChecker. No Sparkle, no appcast,
 /// no server — just GitHub Releases plus a two-part signature check against our own
@@ -38,7 +39,14 @@ final class UpdateChecker {
     func check(userInitiated: Bool) async {
         UserDefaults.standard.set(Date(), forKey: lastCheckKey)
         guard let release = await fetchLatestRelease() else {
-            if userInitiated { alert("Couldn’t Check for Updates", "Please try again later.") }
+            if userInitiated {
+                if let r = await GitHub.coreRemaining(), r < 2 {
+                    alert("Couldn’t Check for Updates",
+                          "GitHub’s hourly request limit is used up (60/hour without a sign-in). Please try again in a little while.")
+                } else {
+                    alert("Couldn’t Check for Updates", "Please try again later.")
+                }
+            }
             return
         }
         if isNewer(release.tag, than: currentVersion) {

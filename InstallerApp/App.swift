@@ -1079,7 +1079,7 @@ struct ContentView: View {
                     Toggle("Launch SideStep at login (keeps apps auto-refreshed)", isOn: Binding(get: { m.launchAtLogin }, set: { m.setLaunchAtLogin($0) }))
                     Button("Refresh all apps now") { m.refreshAllNow() }.disabled(m.installing)
                     Button("Check GitHub apps for updates now") { m.checkGitHubUpdatesNow() }.disabled(m.installing)
-                    Button("Check for Updates…") { Task { await UpdateChecker.shared.check(userInitiated: true) } }
+                    Button("Check for SideStep Update now") { Task { await UpdateChecker.shared.check(userInitiated: true) } }
                     Button("Show Debug Log…") { DebugWindow.show() }
                     Text("SideStep keeps apps signed while it runs in the menu bar — it re-signs automatically when you plug in a device and every couple of hours. No separate background program is needed.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
