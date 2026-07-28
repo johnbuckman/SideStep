@@ -90,7 +90,22 @@ func installDiagnosticsLog() {
     dlog("macOS \(ProcessInfo.processInfo.operatingSystemVersionString); bundle \(Bundle.main.bundleURL.path)")
 }
 
-struct DeviceOption: Identifiable { let udid: String; let name: String; var id: String { udid } }
+struct DeviceOption: Identifiable {
+    let udid: String; let name: String
+    let conn: String                     // "usb" | "wifi"
+    var devMode: Sideloader.DevMode = .unknown
+    var id: String { udid }
+    /// e.g. "UK green cover — Wi-Fi" or "Officepad — USB · Developer Mode off"
+    var label: String {
+        var s = "\(name) — \(conn == "wifi" ? "Wi-Fi" : "USB")"
+        switch devMode {
+        case .disabled:    s += " · Developer Mode OFF"
+        case .unsupported: s += " · no Developer Mode needed"
+        case .enabled, .unknown: break
+        }
+        return s
+    }
+}
 enum InstallKind { case ipa(String), source(SourceApp) }
 
 /// Enables only .ipa / .app in the open panel, plus plain folders so the user
@@ -249,19 +264,39 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         return true
     }
     private func resolveDevice() {
-        status = "Looking for a connected device…"
+        status = "Looking for connected devices…"
         dlog("resolveDevice: enumerating connected devices…")
         Task.detached {
-            let devs = Sideloader.connectedDevices().map { DeviceOption(udid: $0.udid, name: $0.name) }
-            dlog("resolveDevice: found \(devs.count) device(s): \(devs.map { "\($0.name)=\($0.udid)" }.joined(separator: ", "))")
+            // Enumerate everything (USB + Wi-Fi), then annotate each with its
+            // Developer-Mode state (USB-only query; Wi-Fi devices read .unknown).
+            let devs = Sideloader.connectedDevices().map { d -> DeviceOption in
+                let dm = d.conn == "usb" ? Sideloader.developerMode(d.udid) : .unknown
+                return DeviceOption(udid: d.udid, name: d.name, conn: d.conn, devMode: dm)
+            }
+            dlog("resolveDevice: found \(devs.count) device(s): \(devs.map { "\($0.name)[\($0.conn),dev=\($0.devMode)]=\($0.udid)" }.joined(separator: ", "))")
             await MainActor.run {
-                if devs.isEmpty { self.status = "No iOS device connected. Plug in and unlock it, then try again." }
-                else if devs.count == 1 { self.execute(udid: devs[0].udid) }
-                else { self.deviceOptions = devs; self.showDevicePicker = true }
+                if devs.isEmpty {
+                    self.status = "No iOS device found. Connect one over USB (and tap Trust), or make sure a Wi-Fi-paired device is unlocked, then try again."
+                    return
+                }
+                // ALWAYS let the user choose explicitly — even for a single device —
+                // so an install never silently lands on the wrong one.
+                self.deviceOptions = devs
+                self.showDevicePicker = true
             }
         }
     }
-    func chooseDevice(_ udid: String) { showDevicePicker = false; execute(udid: udid) }
+    func chooseDevice(_ udid: String) {
+        showDevicePicker = false
+        // If Developer Mode is off on the chosen (USB) device, guide instead of failing.
+        if let d = deviceOptions.first(where: { $0.udid == udid }), d.devMode == .disabled {
+            Sideloader.revealDeveloperMode(udid)   // make the Settings row appear
+            status = "Developer Mode is off on “\(d.name)”. On the device: Settings › Privacy & Security › Developer Mode › ON, then restart it and try again."
+            dlog("chooseDevice: \(udid) Developer Mode OFF — showing guidance, not installing")
+            return
+        }
+        execute(udid: udid)
+    }
 
     private func execute(udid: String) {
         dlog("execute: udid=\(udid) appleID=\(chosenAppleID ?? "nil") kind=\(pendingKind.map { "\($0)" } ?? "nil")")
@@ -768,8 +803,8 @@ struct ContentView: View {
             ForEach(m.accounts) { acc in Button(acc.displayName) { m.chooseAccount(acc.appleID) } }
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Which device?", isPresented: $m.showDevicePicker, titleVisibility: .visible) {
-            ForEach(m.deviceOptions) { d in Button(d.name) { m.chooseDevice(d.udid) } }
+        .confirmationDialog("Install to which device?", isPresented: $m.showDevicePicker, titleVisibility: .visible) {
+            ForEach(m.deviceOptions) { d in Button(d.label) { m.chooseDevice(d.udid) } }
             Button("Cancel", role: .cancel) {}
         }
     }

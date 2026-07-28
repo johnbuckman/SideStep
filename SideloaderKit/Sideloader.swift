@@ -428,8 +428,9 @@ public struct Sideloader {
         return String(cString: buf)
     }
 
-    /// Connected iOS devices as (udid, name). Empty if none / tooling missing.
-    public static func connectedDevices() -> [(udid: String, name: String)] {
+    /// Connected iOS devices as (udid, name, conn) where conn is "usb" or "wifi".
+    /// Empty if none / tooling missing.
+    public static func connectedDevices() -> [(udid: String, name: String, conn: String)] {
         let helper = helperPath()
         let out: String
         do { out = try run(helper, ["list"]) }
@@ -443,11 +444,13 @@ public struct Sideloader {
             s.allSatisfy { $0.isHexDigit || $0 == "-" } && (s.count == 40 || (s.count == 25 && s.contains("-")))
         }
         var seen = Set<String>()
-        return out.split(separator: "\n").compactMap { line -> (udid: String, name: String)? in
-            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+        return out.split(separator: "\n").compactMap { line -> (udid: String, name: String, conn: String)? in
+            let parts = line.split(separator: "\t").map(String.init)
             guard let u = parts.first, isUDID(u), !seen.contains(u) else { return nil }
             seen.insert(u)
-            return (u, parts.count > 1 ? parts[1] : u)
+            let name = parts.count > 1 && !parts[1].isEmpty ? parts[1] : u
+            let conn = parts.count > 2 ? parts[2] : "usb"   // older helpers omit the column
+            return (u, name, conn)
         }
     }
 

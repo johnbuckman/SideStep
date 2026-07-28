@@ -35,11 +35,20 @@ static idevice_t connect_dev(const char *udid) {
 static int cmd_list(void) {
     idevice_info_t *devs = NULL; int count = 0;
     if (idevice_get_device_list_extended(&devs, &count) != IDEVICE_E_SUCCESS) return 0;
+    // One row per unique UDID: "udid\tname\tconn". A device can appear twice (USB +
+    // Wi-Fi); we prefer the USB entry because dev-mode control + first-time install
+    // need USB, and we report conn so the UI can label USB vs Wi-Fi explicitly.
     for (int i = 0; i < count; i++) {
         const char *udid = devs[i]->udid;
-        int dup = 0;                                    // a device may appear as both USB + WiFi
+        int dup = 0;
         for (int j = 0; j < i; j++) if (!strcmp(devs[j]->udid, udid)) { dup = 1; break; }
         if (dup) continue;
+        int usb = 0, wifi = 0;
+        for (int j = 0; j < count; j++) if (!strcmp(devs[j]->udid, udid)) {
+            if (devs[j]->conn_type == CONNECTION_USBMUXD) usb = 1;
+            else if (devs[j]->conn_type == CONNECTION_NETWORK) wifi = 1;
+        }
+        const char *conn = usb ? "usb" : (wifi ? "wifi" : "usb");
         char *name = NULL;
         idevice_t d = connect_dev(udid);
         lockdownd_client_t ld = NULL;
@@ -51,7 +60,7 @@ static int cmd_list(void) {
             }
             lockdownd_client_free(ld);
         }
-        printf("%s\t%s\n", udid, name ? name : udid);
+        printf("%s\t%s\t%s\n", udid, name ? name : udid, conn);
         free(name);
         if (d) idevice_free(d);
     }
