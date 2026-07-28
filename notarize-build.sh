@@ -59,6 +59,8 @@ for dylib in "$APP"/Contents/Helpers/idevice/*.dylib; do SIGN "$dylib"; done
 SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevicehelper"
 # the direct-IP installer (heartbeat + sync); loads the bundled dylibs via @rpath
 SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevice_ipinstall"
+# Developer Mode detect/reveal helper
+SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevicedevmodectl"
 # OpenSSL framework linked by the app
 SIGN "$APP/Contents/MacOS/OpenSSL.framework/Versions/A/OpenSSL"
 SIGN "$APP/Contents/MacOS/OpenSSL.framework"

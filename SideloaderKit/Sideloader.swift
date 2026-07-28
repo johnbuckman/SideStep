@@ -355,6 +355,43 @@ public struct Sideloader {
         return NSString(string: "~/altstore-fork/imd/dist/idevice/idevicehelper").expandingTildeInPath  // dev fallback
     }
 
+    // MARK: - Developer Mode (iOS 16+)
+
+    public enum DevMode { case enabled, disabled, unsupported, unknown }
+
+    /// Where to point the user when Developer Mode is off.
+    public static let developerModeHelp =
+        "On the device, open Settings ▸ Privacy & Security ▸ scroll to the bottom ▸ Developer Mode ▸ turn it On. " +
+        "The device restarts; after it reboots, unlock it and tap “Turn On” to confirm. (Requires iOS/iPadOS 16 or later.)"
+
+    static func devModeCtlPath() -> String {
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice/idevicedevmodectl").path
+        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
+        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/idevice/idevicedevmodectl").expandingTildeInPath
+    }
+
+    /// Query Developer Mode for a USB-connected device. Returns .unknown for a
+    /// device that isn't reachable over USB (e.g. Wi-Fi-only refreshes) so callers
+    /// don't block on it.
+    public static func developerMode(_ udid: String) -> DevMode {
+        guard let out = try? run(devModeCtlPath(), ["-u", udid, "list"]) else { return .unknown }
+        for line in out.split(separator: "\n") where line.contains(udid) {
+            let l = line.lowercased()
+            if l.contains("enabled") { return .enabled }
+            if l.contains("disabled") { return .disabled }
+            if l.contains("unsupported") || l.contains("not supported") { return .unsupported }
+        }
+        if out.lowercased().contains("unsupported") { return .unsupported }
+        return .unknown
+    }
+
+    /// Make the "Developer Mode" row appear in Settings (it's hidden until a dev
+    /// tool has connected). Best-effort; needs the device on USB.
+    @discardableResult
+    public static func revealDeveloperMode(_ udid: String) -> Bool {
+        ((try? run(devModeCtlPath(), ["-u", udid, "reveal"])) != nil)
+    }
+
     static func ipInstallPath() -> String {
         if let p = ProcessInfo.processInfo.environment["IWISH_IPINSTALL"], !p.isEmpty { return p }
         let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice/idevice_ipinstall").path
@@ -569,6 +606,14 @@ public struct Sideloader {
         _ = try await withCheckedThrowingContinuation { (c: CheckedContinuation<Bool, Error>) in
             _ = signer.signApp(at: appCopy, provisioningProfiles: [profile]) { ok, e in ok ? c.resume(returning: true) : c.resume(throwing: e ?? SideErr.fail("signApp")) }
         }
+        // A USB device with Developer Mode off will reject the install with a
+        // cryptic AMFI error — catch it here and tell the user exactly what to do.
+        if developerMode(iPadUDID) == .disabled {
+            revealDeveloperMode(iPadUDID)   // make the Settings row appear
+            throw SideErr.fail("Developer Mode is turned off on this device. \(developerModeHelp) "
+                + "(I’ve made the Developer Mode menu appear — enable it, then install again.)")
+        }
+
         log("Installing on iPad…")
 
         let payload = work.appendingPathComponent("Payload")

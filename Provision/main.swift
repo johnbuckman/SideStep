@@ -56,6 +56,23 @@ if args.contains("--getudid") {
     } catch { errln(">>> UDID host failed: \(error)"); exit(1) }
 }
 
+// Check (and, if off, reveal) Developer Mode on connected devices.
+if let i = args.firstIndex(of: "--devmode") {
+    let udids: [String]
+    if i + 1 < args.count, !args[i + 1].hasPrefix("-") { udids = [args[i + 1]] }
+    else { udids = Sideloader.connectedDevices().map { $0.udid } }
+    if udids.isEmpty { errln(">>> no connected devices") }
+    for u in udids {
+        let m = Sideloader.developerMode(u)
+        errln(">>> \(u): Developer Mode \(m)")
+        if m == .disabled {
+            Sideloader.revealDeveloperMode(u)
+            errln(">>> \(Sideloader.developerModeHelp)")
+        }
+    }
+    exit(0)
+}
+
 if args.contains("--listen") {
     BeaconListener.shared.start(log: { errln("· \($0)") })
     errln(">>> beacon listener running on udp/\(BeaconListener.port) — open an instrumented app on the device")
