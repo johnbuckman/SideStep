@@ -25,6 +25,7 @@ final class RefreshDaemon {
         guard !started else { return }
         started = true
         q.async { [weak self] in
+            CrashLog.log("RefreshDaemon: loop started")
             while true {
                 self?.tick()
                 Thread.sleep(forTimeInterval: 25)
@@ -32,6 +33,7 @@ final class RefreshDaemon {
         }
     }
     private func tick() {
+        CrashLog.log("RefreshDaemon: tick \(tickCount + 1) — enumerating devices")
         tickCount += 1
         let devices = Set(Sideloader.connectedDevices().map { $0.udid })   // USB + WiFi-reachable
         let newlyConnected = !devices.subtracting(seen).isEmpty
@@ -781,15 +783,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct InstallerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     init() {
-        CrashLog.bootstrap()                 // crash-safe /tmp/isideload.log, FIRST
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        CrashLog.bootstrap(version: v)        // crash-safe /tmp/isideload.log, FIRST
         dlog("App.init: start")
         installDiagnosticsLog()
         dlog("App.init: diagnostics installed")
-        RefreshDaemon.shared.start()
-        dlog("App.init: refresh daemon started")
-        // Listen for on-device beacons and push updates over Wi-Fi.
-        BeaconListener.shared.start(log: { print("[iSideload beacon] \($0)") })
-        dlog("App.init: beacon listener started")
+        // The refresh daemon + beacon listener spawn background work (subprocess,
+        // UDP socket, Bonjour). Defer them until after the app is up so init can
+        // finish and the UI appears — and so any failure is isolated + logged.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            dlog("post-launch: starting RefreshDaemon…")
+            RefreshDaemon.shared.start()
+            dlog("post-launch: RefreshDaemon started")
+            dlog("post-launch: starting BeaconListener…")
+            BeaconListener.shared.start(log: { print("[iSideload beacon] \($0)") })
+            dlog("post-launch: BeaconListener started")
+        }
         dlog("App.init: populating teams…")
         Sideloader.populateTeamsInBackground()   // so the team picker is ready + refresh honors the choice
         // Launch at login is ON by default — register once on first run; the Settings

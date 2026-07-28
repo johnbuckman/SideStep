@@ -21,8 +21,11 @@ public final class BeaconListener: NSObject {
         q.async {
             guard self.source == nil else { return }
             self.log = log
-            guard self.bind() else { return }
+            CrashLog.log("BeaconListener: binding udp/\(BeaconListener.port)…")
+            guard self.bind() else { CrashLog.log("BeaconListener: bind FAILED"); return }
+            CrashLog.log("BeaconListener: bound OK; advertising _isideload._udp…")
             self.advertise()
+            CrashLog.log("BeaconListener: advertise dispatched OK")
             log("beacon listener up on udp/\(BeaconListener.port)")
         }
     }
@@ -144,7 +147,11 @@ public final class BeaconListener: NSObject {
     private func advertise() {
         let svc = NetService(domain: "local.", type: "_isideload._udp.", name: "iSideload", port: Int32(BeaconListener.port))
         // NetService needs a run loop; the app has one, and `Provision --listen` runs RunLoop.main.
-        DispatchQueue.main.async { svc.publish() }
+        DispatchQueue.main.async {
+            CrashLog.log("BeaconListener: NetService.publish() on main…")
+            svc.publish()
+            CrashLog.log("BeaconListener: NetService.publish() returned")
+        }
         advertiser = svc
     }
 }
