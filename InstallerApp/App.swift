@@ -148,7 +148,11 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var showAccountPicker = false
     @Published var showDevicePicker = false
     @Published var deviceOptions: [DeviceOption] = []
+    @Published var installAppName = ""       // titles the consolidated install/device dialog
+    @Published var installOTACapable = false  // show the "over the air" QR option in that dialog
     private var pendingKind: InstallKind?
+    private var pendingInfo: IPAInfo?         // for the QR/over-the-air path
+    private var pendingIPAPath: String?
     private var chosenAppleID: String?
 
     // MARK: accounts
@@ -261,6 +265,11 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     func startInstall(_ kind: InstallKind) {
         dlog("startInstall: kind=\(kind), accounts=\(accounts.count)")
         guard !accounts.isEmpty else { status = "Add an Apple account first."; addingAccount = true; dlog("startInstall: no accounts"); return }
+        // Title + OTA option for the consolidated install/device dialog.
+        switch kind {
+        case .ipa:            installAppName = pendingInfo?.appName ?? "this app"; installOTACapable = pendingInfo?.otaCapable ?? false
+        case .source(let a):  installAppName = a.name; installOTACapable = false; pendingInfo = nil; pendingIPAPath = nil
+        }
         pendingKind = kind; chosenAppleID = nil
         if accounts.count == 1 {
             guard okToInstall(accounts[0]) else { dlog("startInstall: blocked — team not chosen for \(accounts[0].appleID)"); return }
@@ -289,12 +298,13 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             }
             dlog("resolveDevice: found \(devs.count) device(s): \(devs.map { "\($0.name)[\($0.conn),dev=\($0.devMode)]=\($0.udid)" }.joined(separator: ", "))")
             await MainActor.run {
-                if devs.isEmpty {
+                if devs.isEmpty && !self.installOTACapable {
                     self.status = "No iOS device found. Connect one over USB (and tap Trust), or make sure a Wi-Fi-paired device is unlocked, then try again."
                     return
                 }
-                // ALWAYS let the user choose explicitly — even for a single device —
-                // so an install never silently lands on the wrong one.
+                // ALWAYS let the user choose explicitly — even for a single device — so
+                // an install never silently lands on the wrong one. (OTA-capable apps can
+                // still show the QR option even with no device connected.)
                 self.deviceOptions = devs
                 self.showDevicePicker = true
             }
@@ -397,36 +407,24 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         devModeWindow = win
     }
 
-    /// Entry point for a picked or double-clicked `.ipa`: inspect it, then offer the right
-    /// install path. Ad-hoc/enterprise-signed → USB **or** QR (over the air). Development-
-    /// signed → USB only, with the Developer-Mode + trust steps the user will need.
+    /// Entry point for a picked or double-clicked `.ipa`: inspect it, then go straight
+    /// to the consolidated "Do you want to install X?" dialog that lists the devices to
+    /// install to. No separate confirm step, and no over-USB/Wi-Fi wording — the chosen
+    /// device decides the transport (a Wi-Fi device that's already in Developer Mode +
+    /// trusted installs wirelessly). Over-the-air-capable IPAs also get a QR option.
     func openIPA(_ path: String) {
         dlog("openIPA: inspecting \(path)")
         let info = IPAInspector.inspect(path)
         dlog("openIPA: appName=\(info.appName) bundleID=\(info.bundleID) signer=\(info.signer) otaCapable=\(info.otaCapable)")
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Install “\(info.appName)”?"
-        if info.otaCapable {
-            alert.informativeText = "Show a QR code to scan on your device, or install over USB."
-            alert.addButton(withTitle: "Show QR code (over the air)")
-            alert.addButton(withTitle: "Install via USB")
-            alert.addButton(withTitle: "Cancel")
-            let r = alert.runModal()
-            dlog("openIPA: OTA-capable alert → \(r == .alertFirstButtonReturn ? "QR" : r == .alertSecondButtonReturn ? "USB" : "Cancel")")
-            switch r {
-            case .alertFirstButtonReturn:  startOTA(path: path, info: info)
-            case .alertSecondButtonReturn: startInstall(.ipa(path))
-            default: break
-            }
-        } else {
-            alert.informativeText = "This app installs onto your device over USB."
-            alert.addButton(withTitle: "Install via USB")
-            alert.addButton(withTitle: "Cancel")
-            let r = alert.runModal()
-            dlog("openIPA: dev-signed alert → \(r == .alertFirstButtonReturn ? "USB" : "Cancel")")
-            if r == .alertFirstButtonReturn { startInstall(.ipa(path)) }
-        }
+        pendingInfo = info
+        pendingIPAPath = path
+        startInstall(.ipa(path))
+    }
+
+    /// From the consolidated dialog's "Show QR code (over the air)" option.
+    func startPendingOTA() {
+        showDevicePicker = false
+        if let p = pendingIPAPath, let i = pendingInfo { startOTA(path: p, info: i) }
     }
 
     private func startOTA(path: String, info: IPAInfo) {
@@ -936,8 +934,9 @@ struct ContentView: View {
             ForEach(m.accounts) { acc in Button(acc.displayName) { m.chooseAccount(acc.appleID) } }
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Install to which device?", isPresented: $m.showDevicePicker, titleVisibility: .visible) {
+        .confirmationDialog("Do you want to install “\(m.installAppName)”?", isPresented: $m.showDevicePicker, titleVisibility: .visible) {
             ForEach(m.deviceOptions) { d in Button(d.label) { m.chooseDevice(d.udid) } }
+            if m.installOTACapable { Button("Show QR code (over the air)") { m.startPendingOTA() } }
             Button("Cancel", role: .cancel) {}
         }
     }
