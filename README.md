@@ -19,7 +19,7 @@ AltStore/SideStore that signs on the Mac.
 
 ## Download
 
-**[⬇︎ iSideload Beta 0.1 (notarized `.dmg`)](https://github.com/johnbuckman/iSideload/releases/latest)** — macOS 14 (Sonoma) or newer, Apple Silicon.
+**[⬇︎ iSideload Beta 0.1 (notarized `.dmg`)](https://github.com/johnbuckman/iSideload/releases/tag/v0.1-beta)** — macOS 14 (Sonoma) or newer, Apple Silicon.
 
 Open the `.dmg` and drag **iSideload** to **Applications**. It's signed with a
 Developer ID and notarized by Apple, so it opens normally — no right-click /
