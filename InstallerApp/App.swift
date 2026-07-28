@@ -291,8 +291,9 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         // If Developer Mode is off on the chosen (USB) device, guide instead of failing.
         if let d = deviceOptions.first(where: { $0.udid == udid }), d.devMode == .disabled {
             Sideloader.revealDeveloperMode(udid)   // make the Settings row appear
-            status = "Developer Mode is off on “\(d.name)”. On the device: Settings › Privacy & Security › Developer Mode › ON, then restart it and try again."
-            dlog("chooseDevice: \(udid) Developer Mode OFF — showing guidance, not installing")
+            status = "Developer Mode is off on “\(d.name)”."
+            showDevModeHelp(deviceName: d.name)
+            dlog("chooseDevice: \(udid) Developer Mode OFF — showing guidance popup, not installing")
             return
         }
         execute(udid: udid)
@@ -332,6 +333,23 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     static let shared = AppModel()
     private var qrWindow: NSWindow?
     private var udidWindow: NSWindow?
+    private var devModeWindow: NSWindow?
+
+    /// Friendly, roomy popup explaining how to turn on Developer Mode.
+    func showDevModeHelp(deviceName: String) {
+        if let w = devModeWindow { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        let host = NSHostingView(rootView: DevModeHelpView(deviceName: deviceName) { [weak self] in
+            self?.devModeWindow?.close(); self?.devModeWindow = nil
+        })
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 200),
+                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        win.title = "Developer Mode required"
+        win.contentView = host
+        win.setContentSize(host.fittingSize)   // size to the content — never cramped
+        win.center(); win.isReleasedWhenClosed = false
+        win.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        devModeWindow = win
+    }
 
     /// Entry point for a picked or double-clicked `.ipa`: inspect it, then offer the right
     /// install path. Ad-hoc/enterprise-signed → USB **or** QR (over the air). Development-
@@ -569,6 +587,75 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var product = ""
     @Published var version = ""
     func reset() { url = nil; udid = ""; product = ""; version = "" }
+}
+
+/// Friendly popup explaining how to finish enabling Developer Mode. iSideload has
+/// already surfaced the Developer Mode option on the device (via a dev-tool
+/// connection), so the primary path is just: turn on → restart → confirm. Full
+/// manual navigation is offered below as a fallback.
+struct DevModeHelpView: View {
+    let deviceName: String
+    var onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "hammer.circle.fill")
+                    .font(.system(size: 38)).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Almost there — turn on Developer Mode")
+                        .font(.title2.weight(.semibold))
+                    Text(deviceName).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+
+            // Primary path — the option is already waiting on the device.
+            VStack(alignment: .leading, spacing: 12) {
+                Text("iSideload has already switched Developer Mode **on** in this device's settings. To finish, on \(deviceName):")
+                    .fixedSize(horizontal: false, vertical: true)
+                step(1, "Turn **Developer Mode** on.")
+                step(2, "Tap **Restart** when it asks — the device reboots.")
+                step(3, "After it restarts, tap **Turn On** to confirm.")
+                Text("Then run the install again.")
+                    .font(.callout).foregroundStyle(.secondary).padding(.top, 2)
+            }
+            .padding(16)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
+
+            // Secondary — manual navigation, de-emphasised.
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("On the device, open **Settings ▸ Privacy & Security ▸ Developer Mode**, then switch it on.")
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Don't see “Developer Mode”? Keep \(deviceName) connected and reopen Settings — connecting it just now is what makes the option appear.")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.callout).foregroundStyle(.secondary)
+                .padding(.top, 6)
+            } label: {
+                Text("Prefer to find it yourself?").font(.callout.weight(.medium))
+            }
+
+            HStack {
+                Spacer()
+                Button("Got it") { onClose() }
+                    .keyboardShortcut(.defaultAction).controlSize(.large)
+            }
+        }
+        .padding(24)
+        .frame(width: 470)
+    }
+
+    @ViewBuilder private func step(_ n: Int, _ markdown: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 11) {
+            Text("\(n)")
+                .font(.footnote.weight(.bold)).foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(.orange))
+            Text(.init(markdown))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 }
 
 /// Window that shows a QR/link to register a device and, once it reports in, its UDID.
