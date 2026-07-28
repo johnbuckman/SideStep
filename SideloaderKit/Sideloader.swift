@@ -430,7 +430,15 @@ public struct Sideloader {
 
     /// Connected iOS devices as (udid, name). Empty if none / tooling missing.
     public static func connectedDevices() -> [(udid: String, name: String)] {
-        guard let out = try? run(helperPath(), ["list"]) else { return [] }
+        let helper = helperPath()
+        let out: String
+        do { out = try run(helper, ["list"]) }
+        catch {
+            print("[iSideload] connectedDevices: helper FAILED to launch (\(helper)): \(String(reflecting: error))")
+            return []
+        }
+        print("[iSideload] connectedDevices: helper=\(helper)")
+        print("[iSideload] connectedDevices: raw output = \(out.isEmpty ? "(empty)" : out.replacingOccurrences(of: "\n", with: " ⏎ "))")
         func isUDID(_ s: String) -> Bool {
             s.allSatisfy { $0.isHexDigit || $0 == "-" } && (s.count == 40 || (s.count == 25 && s.contains("-")))
         }

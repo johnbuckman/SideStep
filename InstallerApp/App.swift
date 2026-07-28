@@ -56,10 +56,30 @@ final class RefreshDaemon {
 
 let iSideloadLogPath = (("~/Library/Logs/iSideload.log") as NSString).expandingTildeInPath
 func installDiagnosticsLog() {
-    freopen(iSideloadLogPath, "a", stdout); freopen(iSideloadLogPath, "a", stderr)
-    setvbuf(stdout, nil, _IOLBF, 0); setvbuf(stderr, nil, _IOLBF, 0)
+    setvbuf(stdout, nil, _IONBF, 0); setvbuf(stderr, nil, _IONBF, 0)
+    // Tee stdout+stderr → the on-screen debug log AND the file, so nothing is silent.
+    let fm = FileManager.default
+    if !fm.fileExists(atPath: iSideloadLogPath) {
+        try? fm.createDirectory(atPath: (iSideloadLogPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        fm.createFile(atPath: iSideloadLogPath, contents: nil)
+    }
+    guard let logFH = FileHandle(forWritingAtPath: iSideloadLogPath) else {
+        AltSignLogging.setLogging(true); return
+    }
+    logFH.seekToEndOfFile()
+    let pipe = Pipe()
+    dup2(pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
+    dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+    pipe.fileHandleForReading.readabilityHandler = { h in
+        let d = h.availableData
+        guard !d.isEmpty else { return }
+        try? logFH.write(contentsOf: d)
+        DebugLog.shared.write(d)
+    }
     AltSignLogging.setLogging(true)
-    print("\n=== iSideload launched \(Date()) ===")
+    let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    print("\n=== iSideload \(v) launched \(Date()) ===")
+    dlog("macOS \(ProcessInfo.processInfo.operatingSystemVersionString); bundle \(Bundle.main.bundleURL.path)")
 }
 
 struct DeviceOption: Identifiable { let udid: String; let name: String; var id: String { udid } }
@@ -169,20 +189,21 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     private var ipaPanelDelegate: IPAPanelDelegate?
 
     func pickIPA() {
+        // No content-type filter and no enabling-delegate: BOTH make macOS grey
+        // out .ipa files until the directory is re-enumerated (the "navigate away
+        // and come back" bug). Allow everything, then validate the choice.
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = true; panel.canChooseFiles = true
-        // Filter by extension via a delegate rather than allowedContentTypes:
-        // `UTType(filenameExtension: "ipa")` yields a *dynamic* type, and files
-        // LaunchServices has already cached as generic data/zip don't match it,
-        // so .ipa files show up greyed out until the directory is re-enumerated
-        // (navigate away and back). Matching on the extension is deterministic.
-        let delegate = IPAPanelDelegate()
-        ipaPanelDelegate = delegate
-        panel.delegate = delegate
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true            // so .app bundles are selectable
+        panel.treatsFilePackagesAsDirectories = false
         panel.prompt = "Install"
-        defer { ipaPanelDelegate = nil }
-        if panel.runModal() == .OK, let url = panel.url { openIPA(url.path) }
+        dlog("pickIPA: opening file panel")
+        guard panel.runModal() == .OK, let url = panel.url else { dlog("pickIPA: cancelled"); return }
+        let ext = url.pathExtension.lowercased()
+        dlog("pickIPA: chose \(url.path) (ext=\(ext))")
+        if ext == "ipa" || ext == "app" { openIPA(url.path) }
+        else { status = "Please choose an .ipa file or a .app bundle."; dlog("pickIPA: rejected — not .ipa/.app") }
     }
     func pickJSON() {
         let panel = NSOpenPanel()
@@ -201,10 +222,13 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     // MARK: install (resolve account → device → run)
 
     func startInstall(_ kind: InstallKind) {
-        guard !accounts.isEmpty else { status = "Add an Apple account first."; addingAccount = true; return }
+        dlog("startInstall: kind=\(kind), accounts=\(accounts.count)")
+        guard !accounts.isEmpty else { status = "Add an Apple account first."; addingAccount = true; dlog("startInstall: no accounts"); return }
         pendingKind = kind; chosenAppleID = nil
-        if accounts.count == 1 { guard okToInstall(accounts[0]) else { return }; chosenAppleID = accounts[0].appleID; resolveDevice() }
-        else { showAccountPicker = true }
+        if accounts.count == 1 {
+            guard okToInstall(accounts[0]) else { dlog("startInstall: blocked — team not chosen for \(accounts[0].appleID)"); return }
+            chosenAppleID = accounts[0].appleID; resolveDevice()
+        } else { dlog("startInstall: multiple accounts — showing picker"); showAccountPicker = true }
     }
     func chooseAccount(_ id: String) {
         showAccountPicker = false
@@ -218,8 +242,10 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     }
     private func resolveDevice() {
         status = "Looking for a connected device…"
+        dlog("resolveDevice: enumerating connected devices…")
         Task.detached {
             let devs = Sideloader.connectedDevices().map { DeviceOption(udid: $0.udid, name: $0.name) }
+            dlog("resolveDevice: found \(devs.count) device(s): \(devs.map { "\($0.name)=\($0.udid)" }.joined(separator: ", "))")
             await MainActor.run {
                 if devs.isEmpty { self.status = "No iOS device connected. Plug in and unlock it, then try again." }
                 else if devs.count == 1 { self.execute(udid: devs[0].udid) }
@@ -230,9 +256,15 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     func chooseDevice(_ udid: String) { showDevicePicker = false; execute(udid: udid) }
 
     private func execute(udid: String) {
+        dlog("execute: udid=\(udid) appleID=\(chosenAppleID ?? "nil") kind=\(pendingKind.map { "\($0)" } ?? "nil")")
         guard let kind = pendingKind, let aid = chosenAppleID,
-              let (account, session) = AccountStore.session(for: aid) else { status = "Couldn't load that account."; return }
+              let (account, session) = AccountStore.session(for: aid) else {
+            status = "Couldn't load that account."
+            dlog("execute: ABORT — pendingKind/chosenAppleID/session missing (session for \(chosenAppleID ?? "nil") = \(chosenAppleID.flatMap { AccountStore.session(for: $0) } == nil ? "nil" : "ok"))")
+            return
+        }
         installing = true; status = "Installing…"
+        dlog("execute: starting install task for \(account.appleID)")
         Task.detached { [weak self] in
             guard let self else { return }
             let log: @Sendable (String) -> Void = { msg in print("[iSideload] \(msg)"); Task { @MainActor in self.status = String(msg.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
@@ -242,9 +274,10 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                 case .ipa(let path): result = try await Sideloader.installFromIPA(account: account, session: session, filePath: path, iPadUDID: udid, log: log)
                 case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, log: log)
                 }
+                dlog("execute: install SUCCEEDED — \(result)")
                 await MainActor.run { self.status = result }
             } catch {
-                print("[iSideload] INSTALL ERROR: \(error)")
+                dlog("execute: INSTALL FAILED — \(String(reflecting: error))")
                 await MainActor.run { self.status = "Failed: \(error.localizedDescription)" }
             }
             await MainActor.run { self.tracked = Tracked.all(); self.installing = false }
@@ -261,7 +294,9 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     /// install path. Ad-hoc/enterprise-signed → USB **or** QR (over the air). Development-
     /// signed → USB only, with the Developer-Mode + trust steps the user will need.
     func openIPA(_ path: String) {
+        dlog("openIPA: inspecting \(path)")
         let info = IPAInspector.inspect(path)
+        dlog("openIPA: appName=\(info.appName) bundleID=\(info.bundleID) signer=\(info.signer) otaCapable=\(info.otaCapable)")
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Install “\(info.appName)”?"
@@ -270,7 +305,9 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             alert.addButton(withTitle: "Show QR code (over the air)")
             alert.addButton(withTitle: "Install via USB")
             alert.addButton(withTitle: "Cancel")
-            switch alert.runModal() {
+            let r = alert.runModal()
+            dlog("openIPA: OTA-capable alert → \(r == .alertFirstButtonReturn ? "QR" : r == .alertSecondButtonReturn ? "USB" : "Cancel")")
+            switch r {
             case .alertFirstButtonReturn:  startOTA(path: path, info: info)
             case .alertSecondButtonReturn: startInstall(.ipa(path))
             default: break
@@ -284,7 +321,9 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             """
             alert.addButton(withTitle: "Install via USB")
             alert.addButton(withTitle: "Cancel")
-            if alert.runModal() == .alertFirstButtonReturn { startInstall(.ipa(path)) }
+            let r = alert.runModal()
+            dlog("openIPA: dev-signed alert → \(r == .alertFirstButtonReturn ? "USB" : "Cancel")")
+            if r == .alertFirstButtonReturn { startInstall(.ipa(path)) }
         }
     }
 
@@ -697,6 +736,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("Launch iSideload at login (keeps apps auto-refreshed)", isOn: Binding(get: { m.launchAtLogin }, set: { m.setLaunchAtLogin($0) }))
                     Button("Refresh all apps now") { m.refreshAllNow() }.disabled(m.installing)
+                    Button("Show Debug Log…") { DebugWindow.show() }
                     Text("iSideload keeps apps signed while it runs in the menu bar — it re-signs automatically when you plug in a device and every couple of hours. No separate background program is needed.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(.top, 2)
