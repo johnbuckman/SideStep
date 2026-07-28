@@ -212,14 +212,18 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     private var ipaPanelDelegate: IPAPanelDelegate?
 
     func pickIPA() {
-        // No content-type filter and no enabling-delegate: BOTH make macOS grey
-        // out .ipa files until the directory is re-enumerated (the "navigate away
-        // and come back" bug). Allow everything, then validate the choice.
+        // The "navigate away and come back to select the .ipa" greying bug is caused
+        // by the MIXED file+directory mode: with canChooseDirectories=true, macOS
+        // renders plain files disabled until the folder is re-enumerated. A .app is a
+        // file *package*, which NSOpenPanel already treats as a selectable file, so we
+        // do NOT need directory-choosing to pick .app bundles — and folder navigation
+        // still works regardless. No content-type filter / delegate either.
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseFiles = true
-        panel.canChooseDirectories = true            // so .app bundles are selectable
-        panel.treatsFilePackagesAsDirectories = false
+        panel.canChooseDirectories = false           // ← was true; that caused the greying
+        panel.treatsFilePackagesAsDirectories = false  // keep .app selectable as one file
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         panel.prompt = "Install"
         dlog("pickIPA: opening file panel")
         guard panel.runModal() == .OK, let url = panel.url else { dlog("pickIPA: cancelled"); return }
@@ -290,10 +294,25 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         showDevicePicker = false
         // If Developer Mode is off on the chosen (USB) device, guide instead of failing.
         if let d = deviceOptions.first(where: { $0.udid == udid }), d.devMode == .disabled {
-            Sideloader.revealDeveloperMode(udid)   // make the Settings row appear
-            status = "Developer Mode is off on “\(d.name)”."
-            showDevModeHelp(deviceName: d.name)
-            dlog("chooseDevice: \(udid) Developer Mode OFF — showing guidance popup, not installing")
+            status = "Turning on Developer Mode on “\(d.name)”…"
+            dlog("chooseDevice: \(udid) Developer Mode OFF — attempting auto-enable")
+            Task.detached { [weak self] in
+                let r = Sideloader.tryEnableDeveloperMode(udid)   // also reveals the row
+                dlog("chooseDevice: tryEnableDeveloperMode → \(r)")
+                await MainActor.run {
+                    guard let self else { return }
+                    switch r {
+                    case .enabled, .rebooting:
+                        // No passcode → iOS is enabling it and rebooting on its own.
+                        self.status = "Developer Mode is turning on — “\(d.name)” will restart."
+                        self.showDevModeHelp(deviceName: d.name, mode: .rebooting)
+                    case .needsManual, .unknown:
+                        // Passcode set (the common case) → user must flip it themselves.
+                        self.status = "“\(d.name)” needs Developer Mode turned on."
+                        self.showDevModeHelp(deviceName: d.name, mode: .manual)
+                    }
+                }
+            }
             return
         }
         execute(udid: udid)
@@ -319,7 +338,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                 case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, log: log)
                 }
                 dlog("execute: install SUCCEEDED — \(result)")
-                await MainActor.run { self.status = result }
+                await MainActor.run { self.status = result; self.maybeShowTrustHint(udid: udid, appleID: account.appleID) }
             } catch {
                 dlog("execute: INSTALL FAILED — \(String(reflecting: error))")
                 await MainActor.run { self.status = "Failed: \(error.localizedDescription)" }
@@ -335,10 +354,27 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     private var udidWindow: NSWindow?
     private var devModeWindow: NSWindow?
 
-    /// Friendly, roomy popup explaining how to turn on Developer Mode.
-    func showDevModeHelp(deviceName: String) {
+    /// The first app installed from a given Apple ID onto a given device needs a
+    /// one-time "trust the developer" tap; every later app from that same account is
+    /// then trusted automatically. iOS exposes no way to read the trust state or to
+    /// open Settings, so we approximate: show the hint ONCE per (device, account),
+    /// then remember it and stay quiet — matching "don't nag once it's trusted".
+    func maybeShowTrustHint(udid: String, appleID: String) {
+        let key = "isideload.trusted.\(udid).\(appleID)"
+        if UserDefaults.standard.bool(forKey: key) { return }
+        UserDefaults.standard.set(true, forKey: key)
+        let a = NSAlert()
+        a.messageText = "One-time step: trust this developer"
+        a.informativeText = "The first time you install from “\(appleID)” on this device, iOS asks you to trust it before the app will open.\n\nOn the device: Settings ▸ General ▸ VPN & Device Management ▸ tap “\(appleID)” ▸ Trust.\n\nApps you install from this account later won't ask again."
+        a.addButton(withTitle: "Got it")
+        NSApp.activate(ignoringOtherApps: true)
+        a.runModal()
+    }
+
+    /// Friendly, roomy popup explaining how to finish enabling Developer Mode.
+    func showDevModeHelp(deviceName: String, mode: DevModeHelpView.Mode) {
         if let w = devModeWindow { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let host = NSHostingView(rootView: DevModeHelpView(deviceName: deviceName) { [weak self] in
+        let host = NSHostingView(rootView: DevModeHelpView(deviceName: deviceName, mode: mode) { [weak self] in
             self?.devModeWindow?.close(); self?.devModeWindow = nil
         })
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 200),
@@ -362,7 +398,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         let alert = NSAlert()
         alert.messageText = "Install “\(info.appName)”?"
         if info.otaCapable {
-            alert.informativeText = "This app is \(info.signer == .enterprise ? "enterprise" : "ad-hoc")-signed, so it can install over the air. Show a QR code to scan on your device — or install over USB.\(info.signer == .enterprise ? "" : " First time on a device, the user enables Developer Mode (Settings ▸ Privacy & Security ▸ Developer Mode).")"
+            alert.informativeText = "Show a QR code to scan on your device, or install over USB."
             alert.addButton(withTitle: "Show QR code (over the air)")
             alert.addButton(withTitle: "Install via USB")
             alert.addButton(withTitle: "Cancel")
@@ -374,12 +410,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             default: break
             }
         } else {
-            alert.informativeText = """
-            This app is development-signed, so it installs over USB. On the device you'll then:
-            1.  Enable Developer Mode — Settings ▸ Privacy & Security ▸ Developer Mode (the device restarts).
-            2.  Trust the developer — Settings ▸ General ▸ VPN & Device Management ▸ tap the Apple ID ▸ Trust.
-            It re-signs every 7 days (or yearly if the account is a paid $99 Apple ID).
-            """
+            alert.informativeText = "This app installs onto your device over USB."
             alert.addButton(withTitle: "Install via USB")
             alert.addButton(withTitle: "Cancel")
             let r = alert.runModal()
@@ -589,12 +620,15 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     func reset() { url = nil; udid = ""; product = ""; version = "" }
 }
 
-/// Friendly popup explaining how to finish enabling Developer Mode. iSideload has
-/// already surfaced the Developer Mode option on the device (via a dev-tool
-/// connection), so the primary path is just: turn on → restart → confirm. Full
-/// manual navigation is offered below as a fallback.
+/// Friendly popup explaining how to finish enabling Developer Mode.
+/// - `.rebooting`: the device had no passcode, so iSideload already turned Developer
+///   Mode on and the device is restarting — the user only confirms afterwards.
+/// - `.manual`: the device has a passcode, so iOS won't let us enable it remotely (nor
+///   open the Settings app) — iSideload has revealed the row and the user flips it.
 struct DevModeHelpView: View {
+    enum Mode { case rebooting, manual }
     let deviceName: String
+    let mode: Mode
     var onClose: () -> Void
 
     var body: some View {
@@ -603,37 +637,39 @@ struct DevModeHelpView: View {
                 Image(systemName: "hammer.circle.fill")
                     .font(.system(size: 38)).foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Almost there — turn on Developer Mode")
+                    Text(mode == .rebooting ? "Developer Mode is turning on" : "One step on \(deviceName): Developer Mode")
                         .font(.title2.weight(.semibold))
                     Text(deviceName).font(.subheadline).foregroundStyle(.secondary)
                 }
             }
 
-            // Primary path — the option is already waiting on the device.
             VStack(alignment: .leading, spacing: 12) {
-                Text("iSideload has opened the Developer Mode page on \(deviceName) for you. To finish, on the device:")
-                    .fixedSize(horizontal: false, vertical: true)
-                step(1, "\(deviceName) is now on the right page for you to turn **Developer Mode** On.")
-                step(2, "Tap **Restart** when it asks — the device reboots.")
-                step(3, "After it restarts, tap **Turn On** to confirm.")
+                if mode == .rebooting {
+                    Text("iSideload has turned Developer Mode on. **\(deviceName) is restarting now.** When it comes back:")
+                        .fixedSize(horizontal: false, vertical: true)
+                    step(1, "Unlock \(deviceName).")
+                    step(2, "Tap **Turn On** when it asks to confirm Developer Mode.")
+                } else {
+                    Text("Developer Mode has to be switched on from the device itself. iSideload has added it to Settings for you — iOS doesn't allow an app to open Settings on your behalf, so on \(deviceName):")
+                        .fixedSize(horizontal: false, vertical: true)
+                    step(1, "Open **Settings ▸ Privacy & Security ▸ Developer Mode**.")
+                    step(2, "Switch **Developer Mode** on.")
+                    step(3, "Tap **Restart** when it asks — the device reboots.")
+                    step(4, "After it restarts, tap **Turn On** to confirm.")
+                }
                 Text("Then try to install your app again.")
                     .font(.callout).foregroundStyle(.secondary).padding(.top, 2)
             }
             .padding(16)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
 
-            // Secondary — manual navigation, de-emphasised.
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("On the device, open **Settings ▸ Privacy & Security ▸ Developer Mode**, then switch it on.")
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("Don't see “Developer Mode”? Keep \(deviceName) connected and reopen Settings — connecting it just now is what makes the option appear.")
+            if mode == .manual {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: "info.circle").foregroundStyle(.secondary)
+                    Text("Don't see “Developer Mode”? Keep \(deviceName) connected and reopen Settings — connecting it just now is what makes the row appear.")
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.callout).foregroundStyle(.secondary)
-                .padding(.top, 6)
-            } label: {
-                Text("Prefer to find it yourself?").font(.callout.weight(.medium))
             }
 
             HStack {
