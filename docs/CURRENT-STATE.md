@@ -2,7 +2,40 @@
 
 **Purpose:** this is the *bootstrap* document. Read it and you should be able to
 resume work on iSideload's wireless-install features with no other context.
-Last substantive update: **2026-07-15**.
+Last substantive update: **2026-07-28**.
+
+## ✅ Beta 0.1 (2026-07-28) — what shipped since 0.2 alpha
+
+- **Wireless install over Wi-Fi is proven end-to-end**, including on an Eero mesh.
+  Root cause of the old failures was the missing **heartbeat**
+  (`com.apple.mobile.heartbeat`): the host must answer the device's Marco/Polo pings
+  or iOS resets the AFC upload connection over Wi-Fi (AFC error 34 / RST). Direct-IP
+  install (`idevice_new_network` against stock libimobiledevice, pair record by UDID)
+  works with zero discovery. **instproxy must use a NULL status callback** — a non-nil
+  callback made it async, returned 0 immediately, dropped the connection, and
+  false-reported "INSTALL OK". Upload streams `PROGRESS sent total` for a live %/ETA.
+- **Self-updating beacon loop.** `BeaconInject` dylib (runtime-configured via
+  `BeaconConfig.plist`) is injected at install time (LC_LOAD_DYLIB into header
+  padding; shipped as an XOR data blob in `Contents/Resources/` so notarization never
+  scans an iOS binary). App beacons "unlocked+ready"; the Mac's native
+  `BeaconListener` (`_isideload._udp` Bonjour + UDP :51234) re-signs and pushes the
+  newest build back over Wi-Fi. iOS defers the running app's bundle swap until it
+  exits, so the beacon self-`exit(0)`s ~2s after upload.
+- **UX:** consolidated install into one "Do you want to install X?" dialog that lists
+  devices labeled USB/Wi-Fi + Developer Mode; Developer Mode detect + `arm` (no
+  passcode) + reveal + honest popup; one-time trust hint per Apple ID; Debug Log
+  window; crash-safe `/tmp/isideload.log`.
+- **Two launch/robustness fixes worth remembering:** (1) the app died right after
+  init on some Macs with **EXIT=141 = SIGPIPE** — the diagnostics `Pipe` was a local
+  var that dealloc'd, closing the read end; fixed with `signal(SIGPIPE, SIG_IGN)` +
+  retaining the pipe. (2) The `.ipa` file chooser greyed until "navigate away and
+  back" because a menu-bar (`.accessory`) app can't make a modal `NSOpenPanel` the key
+  window; fixed by switching to `.regular` activation policy while the panel is open.
+
+Older detail below is retained for the OTA/QR/registration mechanics.
+
+---
+
 
 Companions: [AI-BOOTSTRAP.md](AI-BOOTSTRAP.md) (project orientation),
 [TLDR.md](TLDR.md) (who can sideload what), [wireless/](wireless/) (the original

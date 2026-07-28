@@ -19,12 +19,12 @@ AltStore/SideStore that signs on the Mac.
 
 ## Download
 
-**[⬇︎ iSideload 0.2 alpha (notarized `.dmg`)](https://github.com/johnbuckman/iSideload/releases/latest)** — macOS 14 (Sonoma) or newer, Apple Silicon.
+**[⬇︎ iSideload Beta 0.1 (notarized `.dmg`)](https://github.com/johnbuckman/iSideload/releases/latest)** — macOS 14 (Sonoma) or newer, Apple Silicon.
 
 Open the `.dmg` and drag **iSideload** to **Applications**. It's signed with a
 Developer ID and notarized by Apple, so it opens normally — no right-click /
 "Open Anyway" dance. iSideload runs in the **menu bar** (no Dock icon); click the
-crate icon to open the panel. This is an **early alpha** — expect rough edges.
+crate icon to open the panel. This is a **beta** — expect rough edges.
 
 ## Presentation
 
@@ -64,6 +64,38 @@ work-in-progress Wi-Fi updating — is in [`docs/`](docs):
 Free Apple IDs (create one at <https://icloud.com>) can install **3 apps**; a
 $99/year Apple Developer subscription removes that limit and extends signing to
 one year.
+
+## New in Beta 0.1
+
+- **Wireless install over Wi-Fi.** iSideload installs (and re-signs) to a device
+  over Wi-Fi with no cable — no jailbreak, no VPN. The breakthrough was answering
+  the device's **heartbeat** (`com.apple.mobile.heartbeat` Marco/Polo pings); without
+  it iOS resets the AFC upload connection over Wi-Fi (the old "AFC error 34"). Install
+  is now **synchronous** (a stray async callback used to false-report success) and
+  streams a live **% + ETA** as the app uploads.
+- **Self-updating apps (opt-in beacon).** At install time iSideload can inject a tiny
+  **beacon** into the app. When the app runs it tells your Mac "I'm unlocked and
+  ready"; the Mac re-signs the newest build and pushes it back over Wi-Fi — so a
+  sideloaded app can **update itself** without the Mac and device being tethered.
+  The beacon also registers for periodic background wake and refreshes when stale.
+  The Mac side is native (a built-in `_isideload._udp` Bonjour listener), so there's
+  still nothing external to run.
+- **One dialog to install.** Choosing an `.ipa` goes straight to a single
+  **"Do you want to install X?"** dialog listing every connected device — each
+  labeled **USB** or **Wi-Fi** and with its **Developer Mode** state. The device you
+  pick decides the transport; over-the-air-capable builds also offer a **QR code**
+  right there.
+- **Developer Mode help that's honest about iOS's limits.** For a device with
+  Developer Mode off, iSideload reveals the Settings row and — on a device with no
+  passcode — can **arm** Developer Mode so iOS reboots into it. (iOS lets no app open
+  or navigate the on-device Settings app, so with a passcode set it shows short
+  manual steps instead.)
+- **One-time trust hint.** The first install from a given Apple ID shows the
+  one-time "trust this developer" step; installs from that account afterwards stay
+  quiet.
+- **Developer Mode detection over USB** and a **Debug Log** window (menu → *Show
+  Debug Log*, savable to a text file), plus a crash-safe `/tmp/isideload.log` that
+  captures startup even if the app dies early.
 
 ## Build
 
