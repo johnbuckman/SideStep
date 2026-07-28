@@ -777,6 +777,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in AppModel.shared.openIPA(u.path) }
         }
     }
+
+    // Lifecycle instrumentation — the app on some Macs quit cleanly right after
+    // init() with no crash report. These log exactly how far past init it gets
+    // and whether it terminates via the normal AppKit path (delegate fires) or is
+    // killed (no willTerminate line). Crash-safe /tmp log, so it survives.
+    func applicationDidFinishLaunching(_ n: Notification) {
+        CrashLog.log("app: applicationDidFinishLaunching (activationPolicy=\(NSApp.activationPolicy().rawValue), windows=\(NSApp.windows.count))")
+        // Belt-and-braces: a menu-bar-only app must be .accessory, not .prohibited.
+        if NSApp.activationPolicy() != .accessory { NSApp.setActivationPolicy(.accessory) }
+    }
+    func applicationWillTerminate(_ n: Notification) {
+        CrashLog.log("app: applicationWillTerminate — clean shutdown via AppKit")
+    }
+    // A MenuBarExtra app has no persistent window; never quit just because the
+    // menu panel (or a transient window) closed.
+    func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool {
+        CrashLog.log("app: applicationShouldTerminateAfterLastWindowClosed? -> NO")
+        return false
+    }
 }
 
 @main
