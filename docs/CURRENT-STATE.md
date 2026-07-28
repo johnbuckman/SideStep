@@ -32,6 +32,17 @@ Last substantive update: **2026-07-28**.
   back" because a menu-bar (`.accessory`) app can't make a modal `NSOpenPanel` the key
   window; fixed by switching to `.regular` activation policy while the panel is open.
 
+- **In-app auto-update** (`InstallerApp/UpdateChecker.swift`, ported from MacCVS).
+  Daily GitHub-Releases check → compare tag vs `CFBundleShortVersionString` → prompt
+  → download the notarized `.dmg` (mount → ditto the `.app` out → detach) → verify
+  `spctl --assess` **accepted** + `TeamIdentifier=XLS3XF57J8` → swap-on-quit via a
+  detached bash script → relaunch. `checkIfDue()` runs post-launch; **Check for
+  Updates…** is in the Settings panel. ⚠️ **Versioning contract:** the build sets
+  `CFBundleShortVersionString` = `SHORT_VERSION` (e.g. `0.1-beta`) to **equal the
+  release tag** (`v0.1-beta`), or the comparator never fires; `CFBundleVersion` =
+  `VERSION` is just the build number. Ship each release tagged `vX.Y[-alpha|-beta|
+  -rc]` with a `.dmg` asset.
+
 Older detail below is retained for the OTA/QR/registration mechanics.
 
 ---

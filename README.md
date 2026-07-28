@@ -97,6 +97,10 @@ one year.
 - **Developer Mode detection over USB** and a **Debug Log** window (menu → *Show
   Debug Log*, savable to a text file), plus a crash-safe `/tmp/sidestep.log` that
   captures startup even if the app dies early.
+- **SideStep updates itself.** A daily GitHub-Releases check (and a **Check for
+  Updates…** button) downloads a newer notarized build, verifies it is signed by
+  our Developer ID team (`spctl --assess` + a `TeamIdentifier` pin), swaps the app
+  bundle on quit, and relaunches — no Sparkle, no server.
 
 ## Build
 
