@@ -27,7 +27,7 @@ public enum IPAInspector {
             appDir = path
         } else {
             // unzip just the Payload into a temp dir and find the .app
-            let tmp = NSTemporaryDirectory() + "isideload-inspect-" + UUID().uuidString
+            let tmp = NSTemporaryDirectory() + "sidestep-inspect-" + UUID().uuidString
             try? fm.createDirectory(atPath: tmp, withIntermediateDirectories: true)
             scratch = tmp
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")

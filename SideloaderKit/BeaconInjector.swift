@@ -1,5 +1,5 @@
 // BeaconInjector — instruments an app bundle with the wireless self-updater before
-// iSideload signs it: injects an LC_LOAD_DYLIB pointing at a bundled BeaconInject.dylib,
+// SideStep signs it: injects an LC_LOAD_DYLIB pointing at a bundled BeaconInject.dylib,
 // drops the dylib + a per-install BeaconConfig.plist into the bundle, and merges the
 // Info.plist keys the beacon needs. Pure Swift — no Python, no external tools.
 //
@@ -9,7 +9,7 @@ import Foundation
 
 public enum BeaconInjector {
     static let dylibName = "BeaconInject.dylib"
-    static let bgTaskID  = "com.isideload.beacon.refresh"
+    static let bgTaskID  = "com.sidestep.beacon.refresh"
 
     /// Instrument `appDir` (a .app). Returns true if the beacon was injected.
     @discardableResult

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the bundled device helper from source (arm64) and stage it into ./idevice/.
 # Produces a self-contained set (helper + relocatable dylibs) that the .app bundles,
-# so iSideload needs no Python / pymobiledevice3 / external tools at runtime.
+# so SideStep needs no Python / pymobiledevice3 / external tools at runtime.
 #
 # Requires: autotools + pkg-config (e.g. MacPorts), and an arm64 OpenSSL
 # (e.g. Homebrew `brew install openssl@3` at /opt/homebrew).

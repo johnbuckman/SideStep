@@ -69,7 +69,7 @@ public final class OTAHost: @unchecked Sendable {
         let host = ip.replacingOccurrences(of: ".", with: "-") + ".my.local-ip.co"
 
         // staging dir
-        let dir = NSTemporaryDirectory() + "isideload-ota-" + UUID().uuidString
+        let dir = NSTemporaryDirectory() + "sidestep-ota-" + UUID().uuidString
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         serveDir = dir
         ipaName = (safe(info.appName).isEmpty ? "app" : safe(info.appName)) + ".ipa"
@@ -263,13 +263,13 @@ public final class OTAHost: @unchecked Sendable {
               <string>UDID</string><string>PRODUCT</string><string>VERSION</string><string>DEVICE_NAME</string>
             </array>
           </dict>
-          <key>PayloadOrganization</key><string>iSideload</string>
+          <key>PayloadOrganization</key><string>SideStep</string>
           <key>PayloadDisplayName</key><string>Register this device</string>
           <key>PayloadDescription</key><string>Sends this device's identifier so its apps can be signed for it.</string>
           <key>PayloadType</key><string>Profile Service</string>
           <key>PayloadVersion</key><integer>1</integer>
           <key>PayloadUUID</key><string>\(UUID().uuidString)</string>
-          <key>PayloadIdentifier</key><string>com.decent.isideload.enroll</string>
+          <key>PayloadIdentifier</key><string>com.decent.sidestep.enroll</string>
         </dict></plist>
         """
     }
@@ -280,7 +280,7 @@ public final class OTAHost: @unchecked Sendable {
         if let cached = enrollBytes { return cached }
         let plist = enrollProfilePlist()
         var out = Data(plist.utf8)
-        let tmp = NSTemporaryDirectory() + "isideload-mc-" + UUID().uuidString
+        let tmp = NSTemporaryDirectory() + "sidestep-mc-" + UUID().uuidString
         try? FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: tmp) }
         func fetch(_ url: String, _ name: String) -> Bool {
@@ -301,7 +301,7 @@ public final class OTAHost: @unchecked Sendable {
 
     /// Parse the CMS/PKCS7-signed device-attributes plist iOS POSTs back.
     private func parseCallback(_ raw: Data) -> [String: String] {
-        let tmp = NSTemporaryDirectory() + "isideload-cb-" + UUID().uuidString + ".der"
+        let tmp = NSTemporaryDirectory() + "sidestep-cb-" + UUID().uuidString + ".der"
         try? raw.write(to: URL(fileURLWithPath: tmp))
         defer { try? FileManager.default.removeItem(atPath: tmp) }
         var plist = runOut("/usr/bin/openssl", ["smime", "-verify", "-noverify", "-inform", "der", "-in", tmp])
@@ -400,7 +400,7 @@ public final class OTAHost: @unchecked Sendable {
     /// Build a `sec_identity_t` from the local-ip.co leaf cert+key plus the correct
     /// GlobalSign intermediate (fetched via the leaf's AIA), so iOS gets a full trusted chain.
     private static func localIPIdentity() throws -> sec_identity_t {
-        let tmp = NSTemporaryDirectory() + "isideload-cert-" + UUID().uuidString
+        let tmp = NSTemporaryDirectory() + "sidestep-cert-" + UUID().uuidString
         try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: tmp) }
         func fetch(_ url: String, _ name: String) throws {
@@ -418,10 +418,10 @@ public final class OTAHost: @unchecked Sendable {
         // bundle leaf+key(+intermediate) into a PKCS12 to import as a SecIdentity
         _ = run("/usr/bin/openssl", ["pkcs12", "-export", "-inkey", tmp + "/server.key",
                 "-in", tmp + "/server.pem", "-certfile", tmp + "/inter.pem",
-                "-passout", "pass:isideload", "-out", tmp + "/id.p12"])
+                "-passout", "pass:sidestep", "-out", tmp + "/id.p12"])
         guard let p12 = FileManager.default.contents(atPath: tmp + "/id.p12") else { throw err("Couldn't build TLS identity.") }
         var items: CFArray?
-        let status = SecPKCS12Import(p12 as CFData, [kSecImportExportPassphrase as String: "isideload"] as CFDictionary, &items)
+        let status = SecPKCS12Import(p12 as CFData, [kSecImportExportPassphrase as String: "sidestep"] as CFDictionary, &items)
         guard status == errSecSuccess,
               let arr = items as? [[String: Any]], let first = arr.first,
               let idAny = first[kSecImportItemIdentity as String] else { throw err("TLS identity import failed (\(status)).") }
@@ -465,7 +465,7 @@ public final class OTAHost: @unchecked Sendable {
     private func xml(_ s: String) -> String { s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;") }
 }
 
-private func err(_ m: String) -> NSError { NSError(domain: "iSideload.OTAHost", code: 1, userInfo: [NSLocalizedDescriptionKey: m]) }
+private func err(_ m: String) -> NSError { NSError(domain: "SideStep.OTAHost", code: 1, userInfo: [NSLocalizedDescriptionKey: m]) }
 @discardableResult private func run(_ tool: String, _ args: [String]) -> Int32 {
     let p = Process(); p.executableURL = URL(fileURLWithPath: tool); p.arguments = args
     p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice

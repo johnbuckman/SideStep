@@ -38,7 +38,7 @@ proved** (file 03). So the research strongly *validates* our finding and reveals
   install/manage apps locally** — the precise problem that stopped our app-side
   install/relay idea dead.
 
-## What this means for iSideload
+## What this means for SideStep
 
 - Our conclusion in file 03 is correct and now corroborated: **app→lockdownd is blocked**;
   the only ways around it are (a) do the install from the **Mac** (our OTA or direct-IP
@@ -49,7 +49,7 @@ proved** (file 03). So the research strongly *validates* our finding and reveals
   computer-free** refresher — but it's a major project and is the reason SideStore is
   heavy.
 - Because we already proved **OTA** works through the hostile mesh with far less
-  machinery, **OTA is the better near-term wireless path for iSideload**. The
+  machinery, **OTA is the better near-term wireless path for SideStep**. The
   VPN-loopback approach is the alternative "north star" if a completely computer-free,
   free-tier-capable refresher becomes a goal.
 

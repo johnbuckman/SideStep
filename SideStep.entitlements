@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- iSideload dlopens Apple's private AOSKit/AuthKit frameworks to generate
+    <!-- SideStep dlopens Apple's private AOSKit/AuthKit frameworks to generate
          Anisette locally, and loads its own bundled OpenSSL/libimobiledevice
          dylibs. Hardened runtime (required for notarization) needs this to permit
          loading libraries that aren't part of the app's own Team seal. -->

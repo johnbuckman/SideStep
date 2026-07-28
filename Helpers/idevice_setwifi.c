@@ -1,5 +1,5 @@
 // Enable (or read) "Show this iPad when on Wi-Fi" == wireless_lockdown
-// EnableWifiConnections, over USB, so iSideload can turn it on itself during the
+// EnableWifiConnections, over USB, so SideStep can turn it on itself during the
 // first cabled install and the user never has to open Finder.
 //   idevice_setwifi <udid> [0|1]      no value = just read current state
 #include <stdio.h>
@@ -35,7 +35,7 @@ int main(int argc,char**argv){
     idevice_t d=0;
     if(idevice_new_with_options(&d,udid,IDEVICE_LOOKUP_USBMUX)!=0||!d){ printf(">>> FAIL: device not on USB\n"); return 2; }
     lockdownd_client_t ld=0;
-    if(lockdownd_client_new_with_handshake(d,&ld,"iSideload-setwifi")!=0){ printf(">>> FAIL: lockdown handshake\n"); return 2; }
+    if(lockdownd_client_new_with_handshake(d,&ld,"SideStep-setwifi")!=0){ printf(">>> FAIL: lockdown handshake\n"); return 2; }
     printf("EnableWifiConnections (before): %d\n", readbool(ld));
     if(argc>=3){
         int want = atoi(argv[2]) ? 1 : 0;

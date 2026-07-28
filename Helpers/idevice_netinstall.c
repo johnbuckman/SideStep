@@ -56,13 +56,13 @@ int main(int argc, char** argv) {
     idevice_t d=0;
     if (idevice_new_with_options(&d,udid,opt)!=0 || !d) { printf(">>> FAIL: device not reachable over %s\n",mode); return 2; }
     lockdownd_client_t ld=0;
-    if (lockdownd_client_new_with_handshake(d,&ld,"iSideload-nettest")!=0) { printf(">>> FAIL: lockdown handshake over %s\n",mode); return 2; }
+    if (lockdownd_client_new_with_handshake(d,&ld,"SideStep-nettest")!=0) { printf(">>> FAIL: lockdown handshake over %s\n",mode); return 2; }
     lockdownd_service_descriptor_t afcsvc=0;
     if (lockdownd_start_service(ld,"com.apple.afc",&afcsvc)!=0) { printf(">>> FAIL: start afc\n"); return 2; }
     afc_client_t afc=0;
     if (afc_client_new(d,afcsvc,&afc)!=0) { printf(">>> FAIL: afc client\n"); return 2; }
     afc_make_directory(afc,"PublicStaging");
-    const char* remote="PublicStaging/isideload-nettest.ipa";
+    const char* remote="PublicStaging/sidestep-nettest.ipa";
     uint64_t h=0;
     if (afc_file_open(afc,remote,AFC_FOPEN_WRONLY,&h)!=0) { printf(">>> FAIL: afc open\n"); return 2; }
     FILE* f=fopen(ipa,"rb"); if(!f){ printf(">>> FAIL: cannot read ipa\n"); return 2; }

@@ -1,8 +1,8 @@
-// Provision / iSideload CLI.
+// Provision / SideStep CLI.
 //   Provision --install                  reuse saved session → install iWish (local build)
 //   Provision --source <url> [bundleID]  reuse saved session → install app from an AltStore source
 //   Provision --refresh                  re-sign+reinstall every tracked app (used by the LaunchAgent)
-//   Provision <apple-id> [--sms]         authenticate (env ISIDELOAD_PW / ISIDELOAD_2FA) + save session
+//   Provision <apple-id> [--sms]         authenticate (env SIDESTEP_PW / SIDESTEP_2FA) + save session
 import Foundation
 import AltSign
 import SwiftBridge
@@ -18,7 +18,7 @@ let sem = DispatchSemaphore(value: 0)
 
 func withSaved(_ work: @escaping (ALTAccount, ALTAppleAPISession) async -> Void) {
     guard let aid = AccountStore.appleIDs.first, let (account, session) = AccountStore.session(for: aid) else {
-        errln("No saved account — sign in via the iSideload app once first."); exit(1)
+        errln("No saved account — sign in via the SideStep app once first."); exit(1)
     }
     errln(">>> account \(account.appleID)")
     Task { await work(account, session); sem.signal() }
@@ -122,14 +122,14 @@ let appleID = args[1]
 ALTAppleAPI.preferSMSTwoFactorCode = args.contains("--sms")
 guard let anisette = Anisette.fresh() else { errln("Anisette generation failed"); exit(1) }
 let pw: String
-if let envpw = ProcessInfo.processInfo.environment["ISIDELOAD_PW"], !envpw.isEmpty { pw = envpw }
+if let envpw = ProcessInfo.processInfo.environment["SIDESTEP_PW"], !envpw.isEmpty { pw = envpw }
 else { pw = String(cString: getpass("Apple ID password (no echo): ")) }
 guard !pw.isEmpty else { errln("no password"); exit(1) }
 
 ALTAppleAPI.sharedAPI.authenticate(
     appleID: appleID, password: pw, anisetteData: anisette,
     verificationHandler: { submit in
-        if let code = ProcessInfo.processInfo.environment["ISIDELOAD_2FA"], !code.isEmpty { submit(code) }
+        if let code = ProcessInfo.processInfo.environment["SIDESTEP_2FA"], !code.isEmpty { submit(code) }
         else { FileHandle.standardError.write(Data("2FA code: ".utf8)); submit(readLine()?.trimmingCharacters(in: .whitespaces)) }
     },
     completionHandler: { account, session, error in

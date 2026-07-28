@@ -11,7 +11,7 @@ Sideloaded apps are signed with a **provisioning profile** that expires:
   app-count limit, full entitlements.
 
 When the profile expires the app stops launching until it is **re-signed and
-re-installed**. Today iSideload does this over **USB**. The whole investigation was
+re-installed**. Today SideStep does this over **USB**. The whole investigation was
 about doing the re-sign+reinstall (and even the first install) **over the network**.
 
 ## What USB actually provides (so we know what to replace)
@@ -28,7 +28,7 @@ Each of these has (or needs) a wireless replacement; see the other files. Key up
 facts we established:
 
 - **`EnableWifiConnections` is required** for any lockdown-over-Wi-Fi path (with it off,
-  the device closes port 62078 on Wi-Fi). **But iSideload can set it itself over USB**
+  the device closes port 62078 on Wi-Fi). **But SideStep can set it itself over USB**
   during the first cabled install via `lockdownd_set_value` (verified: flips `0→1`), so
   the user never touches Finder. It even persists across device reboots.
 - The pair record lives at `/var/db/lockdown/<UDID>.plist` and is read **by UDID**, so a

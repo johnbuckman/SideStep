@@ -1,4 +1,4 @@
-// SideloaderKit — shared provisioning + signing + install pipeline for iSideload.
+// SideloaderKit — shared provisioning + signing + install pipeline for SideStep.
 // Handles: local Anisette, session persistence, keychain password (for unattended
 // refresh), AltStore-format source parsing + IPA download, the provision→sign→
 // install flow for any app, tracking installed apps, and a 7-day refresh.
@@ -22,7 +22,7 @@ public func cont<T>(_ body: (@escaping (T?, Error?) -> Void) -> Void) async thro
     }
 }
 
-let iSideloadSupportDir = NSString(string: "~/Library/Application Support/iSideload").expandingTildeInPath
+let SideStepSupportDir = NSString(string: "~/Library/Application Support/SideStep").expandingTildeInPath
 
 // MARK: - Local Anisette (AOSKit / AuthKit)
 
@@ -112,14 +112,14 @@ extension AccountRecord {
 }
 
 public enum AccountStore {
-    static let path = iSideloadSupportDir + "/accounts.json"
+    static let path = SideStepSupportDir + "/accounts.json"
     public static func records() -> [AccountRecord] {
         guard let d = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let list = try? JSONDecoder().decode([AccountRecord].self, from: d) else { return [] }
         return list
     }
     static func write(_ list: [AccountRecord]) {
-        try? FileManager.default.createDirectory(atPath: iSideloadSupportDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
         if let d = try? JSONEncoder().encode(list) { try? d.write(to: URL(fileURLWithPath: path)) }
     }
     public static func add(account: ALTAccount, session: ALTAppleAPISession) {
@@ -176,7 +176,7 @@ public enum AccountStore {
 // MARK: - Keychain (Apple-ID password, so the refresh daemon can re-auth unattended)
 
 public enum Keychain {
-    private static let service = "com.decent.isideload.appleid"
+    private static let service = "com.decent.sidestep.appleid"
     public static func savePassword(_ password: String, for appleID: String) {
         let acct = appleID.data(using: .utf8)!, pw = password.data(using: .utf8)!
         let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
@@ -208,11 +208,11 @@ public enum Keychain {
 // doesn't invalidate the account's other apps — a free ID has only one cert)
 
 public enum CertStore {
-    static func path(_ appleID: String) -> String { iSideloadSupportDir + "/cert-\(Sideloader.sanitize(appleID)).json" }
+    static func path(_ appleID: String) -> String { SideStepSupportDir + "/cert-\(Sideloader.sanitize(appleID)).json" }
     public static func save(_ cert: ALTCertificate, for appleID: String) {
         guard let data = cert.data, let key = cert.privateKey else { return }
         let obj: [String: String] = ["serial": cert.serialNumber, "data": data.base64EncodedString(), "key": key.base64EncodedString()]
-        try? FileManager.default.createDirectory(atPath: iSideloadSupportDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
         guard let d = try? JSONSerialization.data(withJSONObject: obj) else { return }
         let p = path(appleID)
         try? d.write(to: URL(fileURLWithPath: p))
@@ -282,14 +282,14 @@ extension TrackedApp {
 }
 
 public enum Tracked {
-    static let path = iSideloadSupportDir + "/tracked.json"
+    static let path = SideStepSupportDir + "/tracked.json"
     public static func all() -> [TrackedApp] {
         guard let d = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let list = try? JSONDecoder().decode([TrackedApp].self, from: d) else { return [] }
         return list
     }
     static func write(_ list: [TrackedApp]) {
-        try? FileManager.default.createDirectory(atPath: iSideloadSupportDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
         if let d = try? JSONEncoder().encode(list) { try? d.write(to: URL(fileURLWithPath: path)) }
     }
     public static func upsert(_ app: TrackedApp) {
@@ -405,7 +405,7 @@ public struct Sideloader {
     public static func tryEnableDeveloperMode(_ udid: String) -> DevModeEnable {
         guard let out = try? run(devModeCtlPath(), ["-u", udid, "arm"]) else { return .unknown }
         let l = out.lowercased()
-        print("[iSideload] tryEnableDeveloperMode(arm): \(out.replacingOccurrences(of: "\n", with: " ⏎ "))")
+        print("[SideStep] tryEnableDeveloperMode(arm): \(out.replacingOccurrences(of: "\n", with: " ⏎ "))")
         if l.contains("already enabled") || l.contains("successfully enabled") { return .enabled }
         if l.contains("armed") || l.contains("will reboot") || l.contains("waiting for reboot") { return .rebooting }
         if l.contains("passcode") || l.contains("on the device itself") { return .needsManual }
@@ -455,11 +455,11 @@ public struct Sideloader {
         let out: String
         do { out = try run(helper, ["list"]) }
         catch {
-            print("[iSideload] connectedDevices: helper FAILED to launch (\(helper)): \(String(reflecting: error))")
+            print("[SideStep] connectedDevices: helper FAILED to launch (\(helper)): \(String(reflecting: error))")
             return []
         }
-        print("[iSideload] connectedDevices: helper=\(helper)")
-        print("[iSideload] connectedDevices: raw output = \(out.isEmpty ? "(empty)" : out.replacingOccurrences(of: "\n", with: " ⏎ "))")
+        print("[SideStep] connectedDevices: helper=\(helper)")
+        print("[SideStep] connectedDevices: raw output = \(out.isEmpty ? "(empty)" : out.replacingOccurrences(of: "\n", with: " ⏎ "))")
         func isUDID(_ s: String) -> Bool {
             s.allSatisfy { $0.isHexDigit || $0 == "-" } && (s.count == 40 || (s.count == 25 && s.contains("-")))
         }
@@ -545,7 +545,7 @@ public struct Sideloader {
                 }
             }
         }
-        let newCert: ALTCertificate = try await cont { api.addCertificate(machineName: "iSideload", to: team, session: session, completionHandler: $0) }
+        let newCert: ALTCertificate = try await cont { api.addCertificate(machineName: "SideStep", to: team, session: session, completionHandler: $0) }
         // submitDevelopmentCSR returns metadata + our key but not cert bytes; fetch list + match by serial.
         let all: [ALTCertificate] = try await cont { api.fetchCertificates(for: team, session: session, completionHandler: $0) }
         guard let cert = all.first(where: { $0.serialNumber == newCert.serialNumber }) else { throw SideErr.fail("new cert not in list") }
@@ -595,7 +595,7 @@ public struct Sideloader {
 
         // stage a copy, derive a team-unique bundle id from the app itself
         let fm = FileManager.default
-        let work = fm.temporaryDirectory.appendingPathComponent("isideload-\(UUID().uuidString)")
+        let work = fm.temporaryDirectory.appendingPathComponent("sidestep-\(UUID().uuidString)")
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         let appCopy = work.appendingPathComponent("app.app")
         try fm.copyItem(at: URL(fileURLWithPath: appPath), to: appCopy)
@@ -603,10 +603,10 @@ public struct Sideloader {
         let displayName = plistValue("CFBundleDisplayName", plist) ?? plistValue("CFBundleName", plist)
             ?? (appPath as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
         let origBundleID = plistValue("CFBundleIdentifier", plist) ?? "app"
-        let bundleID = "com.isideload.\(sanitize(displayName)).\(team.identifier)".lowercased()
+        let bundleID = "com.sidestep.\(sanitize(displayName)).\(team.identifier)".lowercased()
 
         // Cache a copy of the app so future refreshes never need the original json/ipa/URL.
-        let cacheDir = iSideloadSupportDir + "/apps"
+        let cacheDir = SideStepSupportDir + "/apps"
         try? fm.createDirectory(atPath: cacheDir, withIntermediateDirectories: true)
         let cachePath = cacheDir + "/\(sanitize(bundleID)).app"
         if URL(fileURLWithPath: appPath).resolvingSymlinksInPath().path != URL(fileURLWithPath: cachePath).resolvingSymlinksInPath().path {
@@ -618,7 +618,7 @@ public struct Sideloader {
         let existing = try await api.fetchAppIDs(for: team, session: session)
         let appID: ALTAppID
         if let f = existing.first(where: { $0.bundleIdentifier == bundleID }) { appID = f }
-        else { appID = try await api.addAppID(withName: "\(displayName) (iSideload)", bundleIdentifier: bundleID, team: team, session: session) }
+        else { appID = try await api.addAppID(withName: "\(displayName) (SideStep)", bundleIdentifier: bundleID, team: team, session: session) }
         let profile = try await api.fetchProvisioningProfile(for: appID, deviceType: .iPad, team: team, session: session)
         log("Signing \(displayName)… (profile exp \(profile.expirationDate))")
 
@@ -688,7 +688,7 @@ public struct Sideloader {
                                          log: @escaping (String) -> Void) async throws -> String {
         let apps = try await fetchSource(sourceURL)
         guard let app = apps.first(where: { $0.bundleIdentifier == bundleIdentifier }) ?? apps.first else { throw SideErr.fail("app not found in source") }
-        let work = FileManager.default.temporaryDirectory.appendingPathComponent("isideload-dl-\(UUID().uuidString)")
+        let work = FileManager.default.temporaryDirectory.appendingPathComponent("sidestep-dl-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let appPath = try await downloadAndUnzipApp(app.downloadURL, into: work, log: log)
         return try await install(account: account, session: session, appPath: appPath.path,
@@ -749,7 +749,7 @@ public struct Sideloader {
             log("freed the App ID slot")
         }
         Tracked.remove(installedBundleID: t.installedBundleID, udid: t.udid)
-        try? FileManager.default.removeItem(atPath: iSideloadSupportDir + "/apps/\(sanitize(t.installedBundleID)).app")
+        try? FileManager.default.removeItem(atPath: SideStepSupportDir + "/apps/\(sanitize(t.installedBundleID)).app")
     }
 
     // MARK: refresh (7-day)
@@ -763,10 +763,10 @@ public struct Sideloader {
 
         // single-flight lock (timer + connect-trigger can both fire) — ignore stale >15min
         let fm = FileManager.default
-        let lock = iSideloadSupportDir + "/refresh.lock"
+        let lock = SideStepSupportDir + "/refresh.lock"
         if let attrs = try? fm.attributesOfItem(atPath: lock), let mt = attrs[.modificationDate] as? Date,
            Date().timeIntervalSince(mt) < 900 { log("another refresh is running — skipping"); return }
-        try? fm.createDirectory(atPath: iSideloadSupportDir, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
         fm.createFile(atPath: lock, contents: nil)
         defer { try? fm.removeItem(atPath: lock) }
 

@@ -87,7 +87,7 @@ int main(int argc, char** argv){
 
     fprintf(stderr,"[direct-IP  udid=%s  ip=%s]\n", udid, ip);
     lockdownd_client_t ld=0;
-    int e = lockdownd_client_new_with_handshake(d, &ld, "iSideload-ipinstall");
+    int e = lockdownd_client_new_with_handshake(d, &ld, "SideStep-ipinstall");
     if(e!=0){ printf(">>> FAIL: lockdown handshake by IP (err %d) — device unreachable/locked or no pair record\n", e); return 2; }
     lockdownd_service_descriptor_t hbsvc=0;
     if(lockdownd_start_service(ld,"com.apple.mobile.heartbeat",&hbsvc)==0 &&
@@ -103,7 +103,7 @@ int main(int argc, char** argv){
     afc_client_t afc=0;
     if(afc_client_new(d,afcsvc,&afc)!=0){ printf(">>> FAIL: afc client\n"); return 2; }
     int mkd=afc_make_directory(afc,"PublicStaging");
-    const char* remote="PublicStaging/isideload-ip.ipa";
+    const char* remote="PublicStaging/sidestep-ip.ipa";
     uint64_t h=0;
     int oe=afc_file_open(afc,remote,AFC_FOPEN_WRONLY,&h);
     if(oe!=0){ printf(">>> FAIL: afc open (mkdir=%d open=%d)  [afc err 8=perm/locked, 4=obj-not-found]\n",mkd,oe); return 2; }

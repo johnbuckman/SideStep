@@ -51,7 +51,7 @@ R6** (trusted). After that, system-trust `curl` returns 200.
    over HTTPS on `https://192-168-4-217.my.local-ip.co:8443/` using the GlobalSign fullchain.
 2. Safari on the device loads the page — **no cert warning** (so DNS-rebinding did **not**
    block the public-name→private-IP resolution, and the cert is trusted).
-3. Tap the link → iOS shows the native **"… would like to install 'iSideload OTA Test'"**
+3. Tap the link → iOS shows the native **"… would like to install 'SideStep OTA Test'"**
    prompt → **Install**.
 4. Server log shows the device fetch `manifest.plist`, `HEAD` then full `GET` of the IPA
    over HTTPS, then install. **App lands on the home screen and runs.**
@@ -88,7 +88,7 @@ natively on this Mac** (CSR via Keychain Access), producing
 **wildcard** Ad-Hoc profile (`XLS3XF57J8.*`). It signed immediately.
 
 **Important:** the *shipped product* signs via **zsign** (`native_bridge_zsign_sign`),
-not macOS `codesign`, so this keychain bug would not affect iSideload in production. It
+not macOS `codesign`, so this keychain bug would not affect SideStep in production. It
 only bit the manual spike.
 
 ## Practical notes

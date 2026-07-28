@@ -1,4 +1,4 @@
-# iSideload — Wireless install & refresh research
+# SideStep — Wireless install & refresh research
 
 This directory documents a deep investigation (2026-07-12) into **installing and
 refreshing sideloaded iOS apps over the network instead of USB**, conducted end to
@@ -9,7 +9,7 @@ strategic conclusions about distribution and scale. Read the numbered files in
 order for the full story, or jump to what you need.
 
 > **New here (human or AI)?** Start with [`../AI-BOOTSTRAP.md`](../AI-BOOTSTRAP.md) for a
-> fast orientation to the whole iSideload project, then come back for the wireless detail.
+> fast orientation to the whole SideStep project, then come back for the wireless detail.
 
 ## TL;DR
 
@@ -25,7 +25,7 @@ order for the full story, or jump to what you need.
      wireless path**; proven end-to-end *through* the hostile mesh. Requires a **paid
      account + Ad-Hoc distribution signing**, and one user tap.
 - The recommended wireless UX is a **QR-code "refresh portal"**: the Mac hosts a web
-  page listing every managed app with one-tap OTA install links; iSideload shows a QR
+  page listing every managed app with one-tap OTA install links; SideStep shows a QR
   that opens it. It is expiry-proof (unlike a companion app, which itself expires).
 - **Scaling:** the "100 devices" limit is an **Ad-Hoc** (central paid account) property,
   not an iOS or free-ID property. Decentralize the account (each user signs with their

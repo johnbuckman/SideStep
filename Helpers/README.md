@@ -1,6 +1,6 @@
 # Device helper (bundled libimobiledevice)
 
-`idevice/` contains a small, self-contained device tool that iSideload uses to
+`idevice/` contains a small, self-contained device tool that SideStep uses to
 list connected devices and install/uninstall apps over USB — so the app needs
 **no Python / pymobiledevice3** or any external tooling at runtime.
 

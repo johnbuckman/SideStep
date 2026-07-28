@@ -7,7 +7,7 @@ import Foundation
 import Darwin
 
 public enum CrashLog {
-    public static let path = "/tmp/isideload.log"
+    public static let path = "/tmp/sidestep.log"
     public static let fd: Int32 = open(path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
     public static var backtraceBuf = [UnsafeMutableRawPointer?](repeating: nil, count: 128)
 
@@ -27,7 +27,7 @@ public enum CrashLog {
         // after init (observed as EXIT=141 on some Macs). With SIG_IGN the write
         // just fails with EPIPE. Must run before any pipe I/O is set up.
         signal(SIGPIPE, SIG_IGN)
-        raw("\n==== iSideload \(version) launch \(Date()) pid \(getpid()) ====\n")
+        raw("\n==== SideStep \(version) launch \(Date()) pid \(getpid()) ====\n")
         raw("macOS \(ProcessInfo.processInfo.operatingSystemVersionString); bundle \(Bundle.main.bundleURL.path)\n")
         NSSetUncaughtExceptionHandler { ex in
             CrashLog.raw("\n!!!! UNCAUGHT EXCEPTION \(ex.name.rawValue): \(ex.reason ?? "")\n")
@@ -42,7 +42,7 @@ private func writeStatic(_ fd: Int32, _ s: StaticString) {   // allocation-free,
 }
 private func crashSignalHandler(_ sig: Int32) {
     let fd = CrashLog.fd
-    writeStatic(fd, "\n!!!! iSideload FATAL SIGNAL ")
+    writeStatic(fd, "\n!!!! SideStep FATAL SIGNAL ")
     switch sig {
     case SIGSEGV: writeStatic(fd, "SIGSEGV")
     case SIGABRT: writeStatic(fd, "SIGABRT")

@@ -1,24 +1,24 @@
-# iSideload — the complete guide
+# SideStep — the complete guide
 
-This guide walks you through everything: what iSideload is, what you need, exactly
+This guide walks you through everything: what SideStep is, what you need, exactly
 what to do on your Mac **and** on your iPhone/iPad, and — importantly — the real
 benefits and limits so you know what you're getting into before you start.
 
 > **Prefer slides?** A visual overview is in
-> [iSideload.pdf](iSideload.pdf) / [iSideload.pptx](iSideload.pptx).
+> [SideStep.pdf](SideStep.pdf) / [SideStep.pptx](SideStep.pptx).
 
 ---
 
-## 1. What iSideload is (and how it works)
+## 1. What SideStep is (and how it works)
 
-iSideload is a small **macOS menu-bar app** that installs iOS apps onto your own
+SideStep is a small **macOS menu-bar app** that installs iOS apps onto your own
 iPhone or iPad **without the App Store and without a jailbreak**, using your own
 Apple ID to sign them.
 
 It works the way AltStore/AltServer do, but simpler and self-contained:
 
 1. You sign in with an Apple ID (a free one is fine).
-2. iSideload asks Apple for a free **development certificate** and a
+2. SideStep asks Apple for a free **development certificate** and a
    **provisioning profile** for your device — exactly what Xcode does for
    developers.
 3. It **signs the app on your Mac** with that certificate.
@@ -26,7 +26,7 @@ It works the way AltStore/AltServer do, but simpler and self-contained:
    Finder uses to sync).
 
 The catch with free Apple IDs is that Apple only makes those profiles valid for
-**7 days**. So iSideload also **re-signs and re-installs your apps automatically**
+**7 days**. So SideStep also **re-signs and re-installs your apps automatically**
 before they expire, as long as the app is running on your Mac and your device is
 reachable.
 
@@ -65,14 +65,14 @@ This is the part people wish they'd read first.
 | Entitlements | Limited — **no** push notifications, iCloud, app groups, associated domains, HealthKit, etc. |
 
 - **3-app limit — but you can beat it with multiple Apple IDs.** Each free Apple
-  ID keeps only 3 sideloaded apps installed at once. **iSideload lets you add as
+  ID keeps only 3 sideloaded apps installed at once. **SideStep lets you add as
   many Apple IDs as you like, and each one is completely independent — it gets its
   own 3 app slots and its own signing.** So 2 accounts = 6 apps, 3 accounts = 9,
   and so on. Since you can create extra free Apple IDs in seconds at
   <https://icloud.com>, adding accounts is the easy way to *greatly* increase how
-  many apps you can install — iSideload just asks which account to use each time.
+  many apps you can install — SideStep just asks which account to use each time.
 - **7-day expiry:** after 7 days an app "expires" and stops launching until it's
-  re-signed. iSideload refreshes automatically (see §7), but the app must be
+  re-signed. SideStep refreshes automatically (see §7), but the app must be
   refreshed *before* the 7 days are up, which means your Mac + device need to be
   together periodically.
 - **Entitlement limits:** apps that need push notifications, iCloud sync, app
@@ -84,16 +84,16 @@ This is the part people wish they'd read first.
 - The app-count limit is effectively lifted.
 - Full entitlements.
 
-iSideload shows each account's type ("Free · 7 days" or "Paid · 1 year") and, for
+SideStep shows each account's type ("Free · 7 days" or "Paid · 1 year") and, for
 free accounts, a live **`slots N/3`** indicator.
 
 **If your Apple ID is in more than one team.** Some Apple IDs belong to both a
 personal **free** team *and* a **paid** team (for example, a company you develop
-for). When that's the case iSideload can't guess which one you want, so the
+for). When that's the case SideStep can't guess which one you want, so the
 account row shows a **Team** menu with a "⚠ Choose a team" prompt. Pick the team
 to sign with — the **free** team gives 7-day installs, a **paid** team gives
 1-year. Your choice is remembered per account, and you can switch teams there at
-any time. iSideload only ever adds *its own* certificate to a paid team; it never
+any time. SideStep only ever adds *its own* certificate to a paid team; it never
 revokes the certificates other developers on that team rely on.
 
 ---
@@ -122,13 +122,13 @@ path.)
 
 ---
 
-## 5. Install iSideload on your Mac
+## 5. Install SideStep on your Mac
 
-1. Open the downloaded `.dmg` and drag **iSideload** into your **Applications**
+1. Open the downloaded `.dmg` and drag **SideStep** into your **Applications**
    folder. The app is **signed with a Developer ID and notarized by Apple**, so it
    opens normally — you do *not* need the right-click → "Open" Gatekeeper
    workaround.
-2. Launch it. iSideload is a **menu-bar app** — it doesn't appear in the Dock;
+2. Launch it. SideStep is a **menu-bar app** — it doesn't appear in the Dock;
    look for the **crate icon in your menu bar** (top-right). Click it to open the
    panel. The panel grows and shrinks to fit its contents as you expand or collapse
    sections.
@@ -136,14 +136,14 @@ path.)
 > **Requirements:** macOS 14 (Sonoma) or newer, Apple Silicon. This is an early
 > **0.1 alpha** — please report anything rough.
 
-Optionally, in the panel's **Settings** section, enable **"Launch iSideload at
+Optionally, in the panel's **Settings** section, enable **"Launch SideStep at
 login"** so it's always running and can keep your apps refreshed.
 
 ---
 
 ## 6. Add your Apple IDs and install apps
 
-**a. Add an account.** In the iSideload panel, under *Your Apple accounts*, click
+**a. Add an account.** In the SideStep panel, under *Your Apple accounts*, click
 **Add account** (or just fill the login box):
 
 - Enter the Apple ID email + password.
@@ -156,7 +156,7 @@ login"** so it's always running and can keep your apps refreshed.
 
 You can add **as many Apple IDs as you like**, and **each account has its own
 separate install limit** — a free account is capped at 3 apps *individually*, so
-2 accounts let you install 6, 3 accounts 9, and so on. When you install, iSideload
+2 accounts let you install 6, 3 accounts 9, and so on. When you install, SideStep
 asks which account to use; pick one that still has a free slot.
 
 > Your password is only used to talk to Apple and is stored in the macOS Keychain
@@ -169,7 +169,7 @@ asks which account to use; pick one that still has a free slot.
 - **Install from .json…** — pick a local AltStore-format catalog file; or
 - **Install from .ipa…** — pick a single `.ipa` (or `.app`) file.
 
-If you have more than one account or more than one device connected, iSideload
+If you have more than one account or more than one device connected, SideStep
 asks **which account** and **which device** to use.
 
 **c. Trust the developer on the device.** The first app you install from a given
@@ -184,10 +184,10 @@ Now open the app from your Home Screen. 🎉
 
 ## 7. Keeping apps alive (the 7-day thing)
 
-Free-signed apps expire after 7 days. iSideload keeps them alive **by itself** —
+Free-signed apps expire after 7 days. SideStep keeps them alive **by itself** —
 there's no separate background program:
 
-- iSideload **launches at login by default** (you can turn that off in Settings),
+- SideStep **launches at login by default** (you can turn that off in Settings),
   so it's always in the menu bar keeping your apps alive.
 - It re-signs and reinstalls an app once it passes **~70% of its 7-day window**
   (about 2 days before expiry). It pushes the update **the moment your device is
@@ -234,7 +234,7 @@ another Apple ID) to make room.
 ## 10. Limits & gotchas (read this)
 
 - **3 apps per free Apple ID; 7-day expiry; ~10 App IDs/week; 1 certificate.**
-  These are Apple's limits, not iSideload's. Add more Apple IDs for more slots.
+  These are Apple's limits, not SideStep's. Add more Apple IDs for more slots.
 - **Entitlements:** free accounts can't grant push notifications, iCloud, app
   groups, associated domains, etc. Apps needing them won't work — use a paid
   account for those.
@@ -244,12 +244,12 @@ another Apple ID) to make room.
   refresh them.
 - **Wi-Fi refresh** needs the device **paired, on the same Wi-Fi network, and
   unlocked** — installs won't run against a *locked* device. That's exactly why,
-  once an app is near expiry, iSideload re-checks **every 5 minutes** and pushes
+  once an app is near expiry, SideStep re-checks **every 5 minutes** and pushes
   the moment the device is reachable and unlocked (so a device you pick up now and
   then will stay signed). Enable Wi-Fi sync (§4d) to allow it. **USB is still the
   most reliable** — a quick plug-in always refreshes everything that's due.
 - **Rotating certificates:** if the saved certificate is ever lost or revoked,
-  iSideload issues a new one; because a free account has only one certificate, the
+  SideStep issues a new one; because a free account has only one certificate, the
   next refresh re-signs your apps onto the new one (they may briefly need that
   refresh to keep working).
 
@@ -268,9 +268,9 @@ another Apple ID) to make room.
   you tapped **Trust This Computer**.
 - **Install fails at the last step** → confirm the device is unlocked and Developer
   Mode is on; try a different cable/port.
-- **App expired** → open iSideload (or plug in) and hit **Refresh**; enable
+- **App expired** → open SideStep (or plug in) and hit **Refresh**; enable
   launch-at-login so it happens automatically.
-- **"Maximum number of certificates"** → iSideload handles this by reusing/rotating
+- **"Maximum number of certificates"** → SideStep handles this by reusing/rotating
   your one free certificate; if it persists, remove an app to free things up.
 - **Hit the 3-app limit** → remove an app (frees the slot) or add another Apple ID.
 
@@ -293,6 +293,6 @@ another Apple ID) to make room.
 
 ## Credits & license
 
-iSideload is built on **AltSign** from the **AltStore** / **SideStore** projects
+SideStep is built on **AltSign** from the **AltStore** / **SideStore** projects
 (© Riley Testut and contributors), licensed **AGPL-3.0**, and is itself licensed
 **AGPL-3.0**. The signer is **zsign** by zhlynn (**MIT**). See `LICENSE`.

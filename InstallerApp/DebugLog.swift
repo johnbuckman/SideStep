@@ -9,7 +9,7 @@ import SideloaderKit
 final class DebugLog: ObservableObject {
     static let shared = DebugLog()
     @Published private(set) var text = "(waiting for output…)\n"
-    private let q = DispatchQueue(label: "com.decent.isideload.debuglog")
+    private let q = DispatchQueue(label: "com.decent.sidestep.debuglog")
     private var buf = Data()
 
     /// Append raw captured bytes (from the stdout/stderr tap).
@@ -37,7 +37,7 @@ struct DebugLogView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("iSideload Debug Log").font(.headline)
+                Text("SideStep Debug Log").font(.headline)
                 Spacer()
                 Button("Save to file…") { save() }
                 Button("Copy") {
@@ -63,7 +63,7 @@ struct DebugLogView: View {
     }
     private func save() {
         let p = NSSavePanel()
-        p.nameFieldStringValue = "iSideload-debug.txt"
+        p.nameFieldStringValue = "SideStep-debug.txt"
         p.allowedContentTypes = [.plainText]
         p.canCreateDirectories = true
         if p.runModal() == .OK, let url = p.url {
@@ -80,7 +80,7 @@ enum DebugWindow {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 520),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable],
                          backing: .buffered, defer: false)
-        w.title = "iSideload Debug Log"
+        w.title = "SideStep Debug Log"
         w.contentViewController = NSHostingController(rootView: DebugLogView())
         w.isReleasedWhenClosed = false
         w.center()

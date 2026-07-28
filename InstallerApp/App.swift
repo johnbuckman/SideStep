@@ -1,4 +1,4 @@
-// iSideload — lean-AltServer macOS app.
+// SideStep — lean-AltServer macOS app.
 // Multiple Apple accounts (each free ID = 3 app slots), install from an AltStore
 // source URL or a local .ipa/.app, pick which account + which connected device.
 import SwiftUI
@@ -16,7 +16,7 @@ import CoreImage
 // (refreshAll is itself expiry-aware + single-flight-locked, so this is cheap).
 final class RefreshDaemon {
     static let shared = RefreshDaemon()
-    private let q = DispatchQueue(label: "com.decent.isideload.refresh")
+    private let q = DispatchQueue(label: "com.decent.sidestep.refresh")
     private var seen = Set<String>()
     private var started = false
     private var tickCount = 0
@@ -51,12 +51,12 @@ final class RefreshDaemon {
         let fiveMinTick = (tickCount % 12 == 0)   // 25s × 12 ≈ 5 min
 
         if (newlyConnected && !devices.isEmpty) || (fiveMinTick && urgentReachable) {
-            Task { try? await Sideloader.refreshAll(log: { print("[iSideload refresh] \($0)") }) }
+            Task { try? await Sideloader.refreshAll(log: { print("[SideStep refresh] \($0)") }) }
         }
     }
 }
 
-let iSideloadLogPath = (("~/Library/Logs/iSideload.log") as NSString).expandingTildeInPath
+let SideStepLogPath = (("~/Library/Logs/SideStep.log") as NSString).expandingTildeInPath
 // Held for the process lifetime so the diagnostics pipe's read end never closes.
 private var diagPipe: Pipe?
 private var diagLogFH: FileHandle?
@@ -65,11 +65,11 @@ func installDiagnosticsLog() {
     setvbuf(stdout, nil, _IONBF, 0); setvbuf(stderr, nil, _IONBF, 0)
     // Tee stdout+stderr → the on-screen debug log AND the file, so nothing is silent.
     let fm = FileManager.default
-    if !fm.fileExists(atPath: iSideloadLogPath) {
-        try? fm.createDirectory(atPath: (iSideloadLogPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        fm.createFile(atPath: iSideloadLogPath, contents: nil)
+    if !fm.fileExists(atPath: SideStepLogPath) {
+        try? fm.createDirectory(atPath: (SideStepLogPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        fm.createFile(atPath: SideStepLogPath, contents: nil)
     }
-    guard let logFH = FileHandle(forWritingAtPath: iSideloadLogPath) else {
+    guard let logFH = FileHandle(forWritingAtPath: SideStepLogPath) else {
         AltSignLogging.setLogging(true); return
     }
     logFH.seekToEndOfFile()
@@ -86,7 +86,7 @@ func installDiagnosticsLog() {
     }
     AltSignLogging.setLogging(true)
     let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-    print("\n=== iSideload \(v) launched \(Date()) ===")
+    print("\n=== SideStep \(v) launched \(Date()) ===")
     dlog("macOS \(ProcessInfo.processInfo.operatingSystemVersionString); bundle \(Bundle.main.bundleURL.path)")
 }
 
@@ -230,7 +230,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         panel.prompt = "Install"
         dlog("pickIPA: opening file panel")
-        // THE greying bug: iSideload is a menu-bar (.accessory / LSUIElement) app, and
+        // THE greying bug: SideStep is a menu-bar (.accessory / LSUIElement) app, and
         // an accessory app can't make a modal open-panel the KEY window — so its file
         // list renders disabled until you navigate (the "go away and come back" fix is
         // really just forcing a re-render once focus settles). Become a regular,
@@ -350,7 +350,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         dlog("execute: starting install task for \(account.appleID)")
         Task.detached { [weak self] in
             guard let self else { return }
-            let log: @Sendable (String) -> Void = { msg in print("[iSideload] \(msg)"); Task { @MainActor in self.status = String(msg.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
+            let log: @Sendable (String) -> Void = { msg in print("[SideStep] \(msg)"); Task { @MainActor in self.status = String(msg.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
             do {
                 let result: String
                 switch kind {
@@ -380,7 +380,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     /// show the hint only on the FIRST install for this Apple ID, then stay quiet —
     /// if they've installed anything else with this ID, trust is already sorted.
     func maybeShowTrustHint(appleID: String) {
-        let key = "isideload.trusted.\(appleID)"
+        let key = "sidestep.trusted.\(appleID)"
         if UserDefaults.standard.bool(forKey: key) { return }
         UserDefaults.standard.set(true, forKey: key)
         let a = NSAlert()
@@ -555,7 +555,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         installing = true; status = "Refreshing \(t.name) on \(t.deviceName.isEmpty ? "device" : t.deviceName)…"
         Task.detached { [weak self] in
             guard let self else { return }
-            let log: @Sendable (String) -> Void = { m in print("[iSideload] \(m)"); Task { @MainActor in self.status = String(m.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
+            let log: @Sendable (String) -> Void = { m in print("[SideStep] \(m)"); Task { @MainActor in self.status = String(m.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
             do { let r = try await Sideloader.refreshOne(t, log: log); await MainActor.run { self.status = r } }
             catch { await MainActor.run { self.status = "Refresh failed: \(error.localizedDescription)" } }
             await MainActor.run { self.tracked = Tracked.all(); self.installing = false }
@@ -566,7 +566,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         installing = true; status = "Removing \(t.name)…"
         Task.detached { [weak self] in
             guard let self else { return }
-            let log: @Sendable (String) -> Void = { m in print("[iSideload] \(m)"); Task { @MainActor in self.status = String(m.prefix(160)) } }
+            let log: @Sendable (String) -> Void = { m in print("[SideStep] \(m)"); Task { @MainActor in self.status = String(m.prefix(160)) } }
             await Sideloader.removeApp(t, log: log)
             await MainActor.run { self.tracked = Tracked.all(); self.status = "Removed \(t.name)."; self.installing = false }
         }
@@ -588,7 +588,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         installing = true; status = "Refreshing all apps…"
         Task.detached { [weak self] in
             guard let self else { return }
-            let log: @Sendable (String) -> Void = { m in print("[iSideload] \(m)"); Task { @MainActor in self.status = String(m.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
+            let log: @Sendable (String) -> Void = { m in print("[SideStep] \(m)"); Task { @MainActor in self.status = String(m.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
             do { try await Sideloader.refreshAll(log: log); await MainActor.run { self.status = "Refreshed." } }
             catch { await MainActor.run { self.status = "Refresh failed: \(error.localizedDescription)" } }
             await MainActor.run { self.tracked = Tracked.all(); self.installing = false }
@@ -629,10 +629,10 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
 }
 
 /// Friendly popup explaining how to finish enabling Developer Mode.
-/// - `.rebooting`: the device had no passcode, so iSideload already turned Developer
+/// - `.rebooting`: the device had no passcode, so SideStep already turned Developer
 ///   Mode on and the device is restarting — the user only confirms afterwards.
 /// - `.manual`: the device has a passcode, so iOS won't let us enable it remotely (nor
-///   open the Settings app) — iSideload has revealed the row and the user flips it.
+///   open the Settings app) — SideStep has revealed the row and the user flips it.
 struct DevModeHelpView: View {
     enum Mode { case rebooting, manual }
     let deviceName: String
@@ -653,12 +653,12 @@ struct DevModeHelpView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 if mode == .rebooting {
-                    Text("iSideload has turned Developer Mode on. **\(deviceName) is restarting now.** When it comes back:")
+                    Text("SideStep has turned Developer Mode on. **\(deviceName) is restarting now.** When it comes back:")
                         .fixedSize(horizontal: false, vertical: true)
                     step(1, "Unlock \(deviceName).")
                     step(2, "Tap **Turn On** when it asks to confirm Developer Mode.")
                 } else {
-                    Text("Developer Mode has to be switched on from the device itself. iSideload has added it to Settings for you — iOS doesn't allow an app to open Settings on your behalf, so on \(deviceName):")
+                    Text("Developer Mode has to be switched on from the device itself. SideStep has added it to Settings for you — iOS doesn't allow an app to open Settings on your behalf, so on \(deviceName):")
                         .fixedSize(horizontal: false, vertical: true)
                     step(1, "Open **Settings ▸ Privacy & Security ▸ Developer Mode**.")
                     step(2, "Switch **Developer Mode** on.")
@@ -755,7 +755,7 @@ struct QRView: View {
             }
             Text(url.absoluteString).font(.caption).foregroundStyle(.secondary)
                 .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
-            Text("Then tap **Install** on your device. First time on a device: enable **Settings ▸ Privacy & Security ▸ Developer Mode** (it restarts once). Keep iSideload open until it finishes.")
+            Text("Then tap **Install** on your device. First time on a device: enable **Settings ▸ Privacy & Security ▸ Developer Mode** (it restarts once). Keep SideStep open until it finishes.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             // Live progress, driven by the host serving the IPA.
@@ -792,7 +792,7 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("iSideload").font(.title2).bold()
+            Text("SideStep").font(.title2).bold()
             Text("Create free Apple accounts at [icloud.com](https://www.icloud.com/) — each free account can install **3 apps**. A $99/year Apple Developer subscription removes the limit.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
@@ -908,10 +908,10 @@ struct ContentView: View {
             Divider()
             DisclosureGroup("Settings") {
                 VStack(alignment: .leading, spacing: 6) {
-                    Toggle("Launch iSideload at login (keeps apps auto-refreshed)", isOn: Binding(get: { m.launchAtLogin }, set: { m.setLaunchAtLogin($0) }))
+                    Toggle("Launch SideStep at login (keeps apps auto-refreshed)", isOn: Binding(get: { m.launchAtLogin }, set: { m.setLaunchAtLogin($0) }))
                     Button("Refresh all apps now") { m.refreshAllNow() }.disabled(m.installing)
                     Button("Show Debug Log…") { DebugWindow.show() }
-                    Text("iSideload keeps apps signed while it runs in the menu bar — it re-signs automatically when you plug in a device and every couple of hours. No separate background program is needed.")
+                    Text("SideStep keeps apps signed while it runs in the menu bar — it re-signs automatically when you plug in a device and every couple of hours. No separate background program is needed.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(.top, 2)
             }.font(.callout)
@@ -923,7 +923,7 @@ struct ContentView: View {
             }
             HStack {
                 Spacer()
-                Button("Quit iSideload") { NSApplication.shared.terminate(nil) }.controlSize(.small).buttonStyle(.borderless)
+                Button("Quit SideStep") { NSApplication.shared.terminate(nil) }.controlSize(.small).buttonStyle(.borderless)
             }
         }
         .padding(20)
@@ -976,7 +976,7 @@ struct InstallerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     init() {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        CrashLog.bootstrap(version: v)        // crash-safe /tmp/isideload.log, FIRST
+        CrashLog.bootstrap(version: v)        // crash-safe /tmp/sidestep.log, FIRST
         dlog("App.init: start")
         installDiagnosticsLog()
         dlog("App.init: diagnostics installed")
@@ -988,22 +988,22 @@ struct InstallerApp: App {
             RefreshDaemon.shared.start()
             dlog("post-launch: RefreshDaemon started")
             dlog("post-launch: starting BeaconListener…")
-            BeaconListener.shared.start(log: { print("[iSideload beacon] \($0)") })
+            BeaconListener.shared.start(log: { print("[SideStep beacon] \($0)") })
             dlog("post-launch: BeaconListener started")
         }
         dlog("App.init: populating teams…")
         Sideloader.populateTeamsInBackground()   // so the team picker is ready + refresh honors the choice
         // Launch at login is ON by default — register once on first run; the Settings
         // toggle can turn it off afterwards (we don't re-enable once configured).
-        if !UserDefaults.standard.bool(forKey: "isideload.loginItemConfigured") {
+        if !UserDefaults.standard.bool(forKey: "sidestep.loginItemConfigured") {
             dlog("App.init: registering login item…")
             try? SMAppService.mainApp.register()
-            UserDefaults.standard.set(true, forKey: "isideload.loginItemConfigured")
+            UserDefaults.standard.set(true, forKey: "sidestep.loginItemConfigured")
         }
         dlog("App.init: done")
     }
     var body: some Scene {
-        MenuBarExtra("iSideload", systemImage: "shippingbox") {
+        MenuBarExtra("SideStep", systemImage: "shippingbox") {
             RootPanel()
         }
         .menuBarExtraStyle(.window)

@@ -15,7 +15,7 @@ below) that must be built before they compile.
 | `idevice_ipinstall.c` | Install an `.ipa` to `<udid>` **by IP** — lockdown handshake → AFC upload to `PublicStaging` → `instproxy_install`. Uses `idevice_new_network`. |
 | `idevice_ipprobe.c` | Probe `<udid> <ip>`: `REACHABLE/UNREACHABLE` + `UNLOCKED/LOCKED` (via AFC directory read) + device name. The lock-state + identity primitive for the sweeper. |
 | `sweep.sh` | Netmask-aware unicast scan of the local subnet(s) for `:62078` (reads the real mask via Python `ipaddress`, so it covers a /22), then identifies each host with `idevice_ipprobe`. DHCP- & mesh-proof discovery. |
-| `idevice_setwifi.c` | Read/set wireless-lockdown `EnableWifiConnections` over USB (`lockdownd_set_value`), so iSideload enables Wi-Fi connectivity itself during the first cabled install. Verified `0→1`. |
+| `idevice_setwifi.c` | Read/set wireless-lockdown `EnableWifiConnections` over USB (`lockdownd_set_value`), so SideStep enables Wi-Fi connectivity itself during the first cabled install. Verified `0→1`. |
 | `idevice_netinstall.c` | Earlier variant: force transport `net`/`usb`/`both` via `idevice_new_with_options` lookup flags. Used to prove the USB path and that usbmux hides a network device while on USB. |
 
 ### The libimobiledevice patch (`idevice_new_network`)
@@ -70,7 +70,7 @@ product's signing uses **zsign**, not codesign.
 
 - Regenerated distribution identity: **`Apple Distribution: Decent Espresso LLC (XLS3XF57J8)`**
   (SHA-1 `5F52E5A7…`), key generated natively on this Mac via Keychain Access CSR.
-- Wildcard Ad-Hoc profile: `~/Desktop/iSideload_AdHoc_2.mobileprovision`
+- Wildcard Ad-Hoc profile: `~/Desktop/SideStep_AdHoc_2.mobileprovision`
   (`XLS3XF57J8.*`, `get-task-allow=false`, all devices).
 - Paid dev wildcard (for the beacon): `~/iwish/dist/paid-XLS3XF57J8.mobileprovision`.
 

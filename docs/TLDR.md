@@ -22,7 +22,7 @@
   every 7 days** (or **yearly** if they have a paid $99 Apple ID). Your app can be
   installed to **unlimited devices**.
 - **Or get a paid Apple ID** and sign your `.ipa` with an **ad-hoc cert** — then people
-  install your app via a **QR code that iSideload creates**, and the user **doesn't have
+  install your app via a **QR code that SideStep creates**, and the user **doesn't have
   to do anything else to their device**. However, this limits your app to being installed
   on **100 devices**.
 

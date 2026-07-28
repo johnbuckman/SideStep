@@ -1,11 +1,11 @@
 // BeaconInject.dylib — always-on "keep me updated over Wi-Fi" library that
-// iSideload injects into every app it installs. One PREBUILT dylib serves any
+// SideStep injects into every app it installs. One PREBUILT dylib serves any
 // app/device: all per-install config is read at RUNTIME from BeaconConfig.plist
-// (which iSideload writes into the app bundle), not baked in at compile time.
+// (which SideStep writes into the app bundle), not baked in at compile time.
 //
 // No user prompt. It continuously (on launch, while in use, on OS background
 // wake) checks how old its signing profile is; if older than the update
-// interval it fires a UDP beacon so the Mac (iSideload) re-signs and pushes a
+// interval it fires a UDP beacon so the Mac (SideStep) re-signs and pushes a
 // fresh copy — which silently resets the profile clock. It also keeps a local
 // notification scheduled warning the user to open the app before the free
 // provisioning profile expires (else a USB reinstall is needed).
@@ -29,11 +29,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define BG_TASK_ID @"com.isideload.beacon.refresh"
-#define NOTIF_ID   @"com.isideload.beacon.expiry"
+#define BG_TASK_ID @"com.sidestep.beacon.refresh"
+#define NOTIF_ID   @"com.sidestep.beacon.expiry"
 
 // ---- runtime config (from BeaconConfig.plist in the app bundle) ----
-static NSString *g_macIP  = @"";           // iSideload's LAN IP at install time (unicast fallback)
+static NSString *g_macIP  = @"";           // SideStep's LAN IP at install time (unicast fallback)
 static NSString *g_udid   = @"";           // this device's UDID (so the Mac knows who beacs)
 static NSString *g_bundle = @"";           // installed bundle id (so the Mac knows which app)
 static int g_port         = 51234;
@@ -146,7 +146,7 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
                 dispatch_async(dispatch_get_main_queue(), ^{ onProgress(pct, eta); });
             }
         } else if (!sawAny && -start.timeIntervalSinceNow > 12) {
-            dispatch_async(dispatch_get_main_queue(), ^{ onStatus(@"No reply yet — is iSideload running on your Mac?"); });
+            dispatch_async(dispatch_get_main_queue(), ^{ onStatus(@"No reply yet — is SideStep running on your Mac?"); });
         }
     }
     close(s);
@@ -192,7 +192,7 @@ static void scheduleBGRefresh(void) {
     }
 }
 
-// ---------- Bonjour browse for iSideload ----------
+// ---------- Bonjour browse for SideStep ----------
 @interface BeaconBonjour : NSObject <NSNetServiceBrowserDelegate, NSNetServiceDelegate>
 @property(nonatomic, strong) NSNetServiceBrowser *browser;
 @property(nonatomic, strong) NSMutableArray<NSNetService *> *pending;
@@ -202,7 +202,7 @@ static void scheduleBGRefresh(void) {
     self.pending = [NSMutableArray array];
     self.browser = [NSNetServiceBrowser new];
     self.browser.delegate = self;
-    [self.browser searchForServicesOfType:@"_isideload._udp." inDomain:@"local."];
+    [self.browser searchForServicesOfType:@"_sidestep._udp." inDomain:@"local."];
 }
 - (void)netServiceBrowser:(NSNetServiceBrowser *)b didFindService:(NSNetService *)svc moreComing:(BOOL)more {
     [self.pending addObject:svc]; svc.delegate = self; [svc resolveWithTimeout:5];
@@ -214,7 +214,7 @@ static void scheduleBGRefresh(void) {
             char buf[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &((struct sockaddr_in *)sa)->sin_addr, buf, sizeof buf);
             g_bonjourIP = [NSString stringWithUTF8String:buf];
-            NSLog(@"[beacon] Bonjour resolved iSideload at %@", g_bonjourIP);
+            NSLog(@"[beacon] Bonjour resolved SideStep at %@", g_bonjourIP);
         }
     }
     [self.pending removeObject:svc];

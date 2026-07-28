@@ -1,4 +1,4 @@
-# iSideload
+# SideStep
 
 A small **macOS menu-bar app** that installs and keeps iOS apps signed on your
 devices using a **free Apple ID** — a lean, self-contained alternative to
@@ -19,21 +19,21 @@ AltStore/SideStore that signs on the Mac.
 
 ## Download
 
-**[⬇︎ iSideload Beta 0.1 (notarized `.dmg`)](https://github.com/johnbuckman/iSideload/releases/tag/v0.1-beta)** — macOS 14 (Sonoma) or newer, Apple Silicon.
+**[⬇︎ SideStep Beta 0.1 (notarized `.dmg`)](https://github.com/johnbuckman/SideStep/releases/tag/v0.1-beta)** — macOS 14 (Sonoma) or newer, Apple Silicon.
 
-Open the `.dmg` and drag **iSideload** to **Applications**. It's signed with a
+Open the `.dmg` and drag **SideStep** to **Applications**. It's signed with a
 Developer ID and notarized by Apple, so it opens normally — no right-click /
-"Open Anyway" dance. iSideload runs in the **menu bar** (no Dock icon); click the
+"Open Anyway" dance. SideStep runs in the **menu bar** (no Dock icon); click the
 crate icon to open the panel. This is a **beta** — expect rough edges.
 
 ## Presentation
 
-A slide overview of iSideload — current state, how USB install works, the
+A slide overview of SideStep — current state, how USB install works, the
 multi-Apple-ID and $99 paid-account benefits, the menu-bar UI, and the
 work-in-progress Wi-Fi updating — is in [`docs/`](docs):
 
-- **[iSideload.pdf](docs/iSideload.pdf)** — view in any browser
-- **[iSideload.pptx](docs/iSideload.pptx)** — editable PowerPoint
+- **[SideStep.pdf](docs/SideStep.pdf)** — view in any browser
+- **[SideStep.pptx](docs/SideStep.pptx)** — editable PowerPoint
 
 ## What it does
 
@@ -41,7 +41,7 @@ work-in-progress Wi-Fi updating — is in [`docs/`](docs):
   (including SMS for accounts with no trusted device), and the Apple developer
   provisioning are all handled for you.
 - **Pick which team to sign with.** If an Apple ID belongs to more than one
-  developer team (e.g. a personal free team *and* a paid company team), iSideload
+  developer team (e.g. a personal free team *and* a paid company team), SideStep
   shows a per-account **Team** menu so you choose — a free team gives 7-day
   installs, a paid team gives 1-year. It never touches other developers'
   certificates on a paid team.
@@ -50,7 +50,7 @@ work-in-progress Wi-Fi updating — is in [`docs/`](docs):
 - Apps are signed with a **SHA-256 CodeDirectory via [zsign]** (the format iOS
   16–26 accept) using Apple's `codesign`-equivalent path, then installed over the
   lockdown/`usbmux` protocol.
-- **Keeps apps alive** with no separate background program: iSideload re-signs and
+- **Keeps apps alive** with no separate background program: SideStep re-signs and
   reinstalls before the 7-day free-provisioning expiry — on a timer, the moment you
   plug a device in, and (near expiry) by re-checking **every 5 minutes** and pushing
   as soon as the device is reachable over USB or Wi-Fi. It **launches at login by
@@ -67,18 +67,19 @@ one year.
 
 ## New in Beta 0.1
 
-- **Wireless install over Wi-Fi.** iSideload installs (and re-signs) to a device
+- **Wireless install over Wi-Fi.** SideStep installs (and re-signs) to a device
   over Wi-Fi with no cable — no jailbreak, no VPN. The breakthrough was answering
   the device's **heartbeat** (`com.apple.mobile.heartbeat` Marco/Polo pings); without
   it iOS resets the AFC upload connection over Wi-Fi (the old "AFC error 34"). Install
   is now **synchronous** (a stray async callback used to false-report success) and
   streams a live **% + ETA** as the app uploads.
-- **Self-updating apps (opt-in beacon).** At install time iSideload can inject a tiny
-  **beacon** into the app. When the app runs it tells your Mac "I'm unlocked and
-  ready"; the Mac re-signs the newest build and pushes it back over Wi-Fi — so a
-  sideloaded app can **update itself** without the Mac and device being tethered.
+- **Self-updating apps (built-in beacon).** Every app SideStep installs is
+  automatically instrumented with a tiny **beacon**. When the app runs it tells your
+  Mac "I'm unlocked and ready"; the Mac re-signs the newest build and pushes it back
+  over Wi-Fi — so a sideloaded app can **update itself** without the Mac and device
+  being tethered.
   The beacon also registers for periodic background wake and refreshes when stale.
-  The Mac side is native (a built-in `_isideload._udp` Bonjour listener), so there's
+  The Mac side is native (a built-in `_sidestep._udp` Bonjour listener), so there's
   still nothing external to run.
 - **One dialog to install.** Choosing an `.ipa` goes straight to a single
   **"Do you want to install X?"** dialog listing every connected device — each
@@ -86,7 +87,7 @@ one year.
   pick decides the transport; over-the-air-capable builds also offer a **QR code**
   right there.
 - **Developer Mode help that's honest about iOS's limits.** For a device with
-  Developer Mode off, iSideload reveals the Settings row and — on a device with no
+  Developer Mode off, SideStep reveals the Settings row and — on a device with no
   passcode — can **arm** Developer Mode so iOS reboots into it. (iOS lets no app open
   or navigate the on-device Settings app, so with a passcode set it shows short
   manual steps instead.)
@@ -94,7 +95,7 @@ one year.
   one-time "trust this developer" step; installs from that account afterwards stay
   quiet.
 - **Developer Mode detection over USB** and a **Debug Log** window (menu → *Show
-  Debug Log*, savable to a text file), plus a crash-safe `/tmp/isideload.log` that
+  Debug Log*, savable to a text file), plus a crash-safe `/tmp/sidestep.log` that
   captures startup even if the app dies early.
 
 ## Build
@@ -104,7 +105,7 @@ swift build --product InstallerApp     # the menu-bar app
 swift build --product Provision         # the CLI (install / refresh)
 ```
 
-`./bundle-app.sh` builds and bundles the menu-bar app into `iSideload.app`. The
+`./bundle-app.sh` builds and bundles the menu-bar app into `SideStep.app`. The
 device tools (a small [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice)
 helper in [`Helpers/idevice`](Helpers)) are bundled in the app, so it's
 **self-contained** — no Python or external tools required at runtime.
@@ -113,7 +114,7 @@ helper in [`Helpers/idevice`](Helpers)) are bundled in the app, so it's
 
 Built on **[AltSign]** from the **[AltStore]** / **[SideStore]** projects
 (© Riley Testut and contributors), which are licensed **AGPL-3.0**. Because this
-is a derivative work, iSideload is likewise licensed under the **GNU Affero
+is a derivative work, SideStep is likewise licensed under the **GNU Affero
 General Public License v3.0** — see [`LICENSE`](LICENSE).
 
 The signer is **[zsign]** by zhlynn, included under the **MIT License**
@@ -121,7 +122,7 @@ The signer is **[zsign]** by zhlynn, included under the **MIT License**
 
 App screenshot:
 
-<img src="docs/isideload.png" alt="iSideload menu-bar app" width="447">
+<img src="docs/sidestep.png" alt="SideStep menu-bar app" width="447">
 
 [AltSign]: https://github.com/SideStore/AltSign
 [AltStore]: https://github.com/altstoreio/AltStore

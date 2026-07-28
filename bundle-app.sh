@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build InstallerApp and bundle it into iSideload.app (repo-relative).
-#   ./bundle-app.sh [output-dir]     default output: /Applications/iSideload.app
+# Build InstallerApp and bundle it into SideStep.app (repo-relative).
+#   ./bundle-app.sh [output-dir]     default output: /Applications/SideStep.app
 set -e
 cd "$(dirname "$0")"
 # Force a relink: swift build sometimes recompiles a changed module but skips
@@ -8,10 +8,10 @@ cd "$(dirname "$0")"
 rm -f "$(swift build --show-bin-path)/InstallerApp"
 swift build --product InstallerApp
 BINDIR=$(swift build --show-bin-path)
-APP="${1:-/Applications}/iSideload.app"
+APP="${1:-/Applications}/SideStep.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BINDIR/InstallerApp" "$APP/Contents/MacOS/iSideload"
+cp "$BINDIR/InstallerApp" "$APP/Contents/MacOS/SideStep"
 cp -R "$BINDIR/OpenSSL.framework" "$APP/Contents/MacOS/OpenSSL.framework"
 cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 mkdir -p "$APP/Contents/Helpers"
@@ -21,10 +21,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>iSideload</string>
-  <key>CFBundleDisplayName</key><string>iSideload</string>
-  <key>CFBundleIdentifier</key><string>com.decent.isideload</string>
-  <key>CFBundleExecutable</key><string>iSideload</string>
+  <key>CFBundleName</key><string>SideStep</string>
+  <key>CFBundleDisplayName</key><string>SideStep</string>
+  <key>CFBundleIdentifier</key><string>com.decent.sidestep</string>
+  <key>CFBundleExecutable</key><string>SideStep</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>0.2</string>

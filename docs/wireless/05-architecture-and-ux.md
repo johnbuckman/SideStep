@@ -31,7 +31,7 @@ Why a web page beats a **companion app**:
 
 ### Bootstrapping the URL (solving DHCP + typing)
 The portal URL contains the Mac's DHCP-dynamic IP, so:
-- **Primary: a QR code** in iSideload's menu-bar panel encoding the *current* URL. Point
+- **Primary: a QR code** in SideStep's menu-bar panel encoding the *current* URL. Point
   the iPad camera at it → Safari opens the portal. Zero typing, always current.
 - **Typeable fallback: a bare-IP redirect.** Run a tiny HTTP listener on the Mac so the
   user types just `192.168.4.217` → `302` → the trusted HTTPS portal. Binding `:80`
@@ -91,10 +91,10 @@ Two ways to make an arbitrary app ping the Mac / trigger a refresh:
 - **Sign-time dylib injection** (per-app, seamless): build a tiny `beacon.dylib` with a
   `__attribute__((constructor))`, copy it into the bundle, add an `LC_LOAD_DYLIB` load
   command to the main Mach-O (`insert_dylib`/`optool`), add `NSLocalNetworkUsageDescription`
-  to Info.plist, then re-sign the whole bundle — which iSideload already does. Because the
+  to Info.plist, then re-sign the whole bundle — which SideStep already does. Because the
   whole bundle is signed by **one** cert, the injected dylib is not a nested-signature
   mismatch (that's the `0xe8008001` bug AltStore hits by leaving nested dylibs
-  mis-signed — iSideload's uniform zsign re-sign is *why* injection is clean here). The
+  mis-signed — SideStep's uniform zsign re-sign is *why* injection is clean here). The
   constructor runs before `UIApplication` exists, so defer `openURL(itms-services…)` until
   `UIApplicationDidBecomeActiveNotification`. Caveats: a local-network permission prompt;
   the install trigger interrupts; rare anti-tamper apps notice the extra dylib;

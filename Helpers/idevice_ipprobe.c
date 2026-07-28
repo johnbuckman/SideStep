@@ -34,7 +34,7 @@ int main(int argc, char** argv){
     idevice_t d=0;
     if(idevice_new_network(&d,udid,ip)!=0||!d){ printf("%s\tUNREACHABLE\t-\t-\n",ip); return 2; }
     lockdownd_client_t ld=0;
-    if(lockdownd_client_new_with_handshake(d,&ld,"iSideload-probe")!=0){ printf("%s\tUNREACHABLE\t-\t-\n",ip); return 2; }
+    if(lockdownd_client_new_with_handshake(d,&ld,"SideStep-probe")!=0){ printf("%s\tUNREACHABLE\t-\t-\n",ip); return 2; }
     // device name (best-effort; may be prohibited while locked)
     char* name=NULL; plist_t v=NULL;
     if(lockdownd_get_value(ld,NULL,"DeviceName",&v)==0 && v){ plist_get_string_val(v,&name); plist_free(v); }

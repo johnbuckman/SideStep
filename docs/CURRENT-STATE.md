@@ -1,7 +1,7 @@
 # Current State — OTA / QR install, progress, and device registration
 
 **Purpose:** this is the *bootstrap* document. Read it and you should be able to
-resume work on iSideload's wireless-install features with no other context.
+resume work on SideStep's wireless-install features with no other context.
 Last substantive update: **2026-07-28**.
 
 ## ✅ Beta 0.1 (2026-07-28) — what shipped since 0.2 alpha
@@ -18,13 +18,13 @@ Last substantive update: **2026-07-28**.
   `BeaconConfig.plist`) is injected at install time (LC_LOAD_DYLIB into header
   padding; shipped as an XOR data blob in `Contents/Resources/` so notarization never
   scans an iOS binary). App beacons "unlocked+ready"; the Mac's native
-  `BeaconListener` (`_isideload._udp` Bonjour + UDP :51234) re-signs and pushes the
+  `BeaconListener` (`_sidestep._udp` Bonjour + UDP :51234) re-signs and pushes the
   newest build back over Wi-Fi. iOS defers the running app's bundle swap until it
   exits, so the beacon self-`exit(0)`s ~2s after upload.
 - **UX:** consolidated install into one "Do you want to install X?" dialog that lists
   devices labeled USB/Wi-Fi + Developer Mode; Developer Mode detect + `arm` (no
   passcode) + reveal + honest popup; one-time trust hint per Apple ID; Debug Log
-  window; crash-safe `/tmp/isideload.log`.
+  window; crash-safe `/tmp/sidestep.log`.
 - **Two launch/robustness fixes worth remembering:** (1) the app died right after
   init on some Macs with **EXIT=141 = SIGPIPE** — the diagnostics `Pipe` was a local
   var that dealloc'd, closing the read end; fixed with `signal(SIGPIPE, SIG_IGN)` +
@@ -45,9 +45,9 @@ research). This file supersedes them where they disagree about *current* state.
 
 ## 1. Orientation
 
-- **Repo:** `github.com/johnbuckman/iSideload` (AGPL-3.0). Git root is
-  `~/altstore-fork/AltSign-SS`, branch **`isl-main`**, remote **`isideload`**.
-- **Installed app:** `/Applications/AI Apps/iSideload.app` (menu-bar, `LSUIElement`).
+- **Repo:** `github.com/johnbuckman/SideStep` (AGPL-3.0). Git root is
+  `~/altstore-fork/AltSign-SS`, branch **`isl-main`**, remote **`sidestep`**.
+- **Installed app:** `/Applications/AI Apps/SideStep.app` (menu-bar, `LSUIElement`).
 - **Build the app:** `./bundle-app.sh` (in repo) or `~/altstore-fork/rebuild-app.sh`
   (John's local variant, **not** in the repo — it also bundles `Helpers/idevice`
   and sets the `.ipa` file association).
@@ -113,7 +113,7 @@ Development-signed IPAs are *silently dropped* by `installd` over OTA.
 Assets in use:
 - Cert: **`Apple Distribution: Decent Espresso LLC (XLS3XF57J8)`**, SHA-1
   `5F52E5A765CC6B226BE3098A4B3176CC67070C8A`, in John's login keychain.
-- Profile: **`~/Desktop/iSideload_AdHoc_2.mobileprovision`** — wildcard App ID
+- Profile: **`~/Desktop/SideStep_AdHoc_2.mobileprovision`** — wildcard App ID
   `XLS3XF57J8.*` (so it signs *any* bundle id), valid to **2027-07-12**,
   currently **4 devices**.
 
@@ -123,7 +123,7 @@ Re-sign recipe (no private-key export needed — `codesign` uses the keychain):
 #    application-identifier = XLS3XF57J8.<bundleid>, get-task-allow = false,
 #    com.apple.developer.team-identifier = XLS3XF57J8, keychain-access-groups
 # 2. swap in the ad-hoc profile, drop the old signature
-cp iSideload_AdHoc_2.mobileprovision "$APP/embedded.mobileprovision"
+cp SideStep_AdHoc_2.mobileprovision "$APP/embedded.mobileprovision"
 rm -rf "$APP/_CodeSignature"
 # 3. sign NESTED code first (dylibs/.so, then .framework bundles), then the app
 find "$APP" \( -name '*.dylib' -o -name '*.so' \) -type f -exec codesign -f -s "$ID" --timestamp=none {} \;
@@ -274,7 +274,7 @@ curl -s -X POST --data-binary @cb.der -H "Content-Type: application/pkcs7-signat
    (valid signature, real iOS arm64 app, min iOS 17, byte-identical over the
    wire). Cause: **the iPhone's UDID is not in the 4-device ad-hoc profile.**
    Fix: capture the UDID (§6) → register with Apple → regenerate
-   `iSideload AdHoc 2` → re-sign Magnatune / de1app / iWish → reinstall.
+   `SideStep AdHoc 2` → re-sign Magnatune / de1app / iWish → reinstall.
    Test IPAs live on the Desktop: `Magnatune-v0.1.0-adhoc.ipa`,
    `de1app-adhoc.ipa`, `iWish-adhoc.ipa`.
 2. **Level 2 install confirmation** — add a first-launch ping from the app so the
@@ -299,4 +299,4 @@ curl -s -X POST --data-binary @cb.der -H "Content-Type: application/pkcs7-signat
 - `/d/lib/otabeta.tcl` + `/d/lib/otabeta_README.md` — the decentespresso.com
   `/beta` web installer (NaviServer/Tcl, CVS, uncommitted).
 - `/home/decent/bin/zsign` on decentespresso.com (see §3).
-- The signing cert (keychain) and `~/Desktop/iSideload_AdHoc_2.mobileprovision`.
+- The signing cert (keychain) and `~/Desktop/SideStep_AdHoc_2.mobileprovision`.

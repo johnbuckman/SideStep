@@ -1,4 +1,4 @@
-// idevicehelper — minimal device ops for iSideload, built on libimobiledevice.
+// idevicehelper — minimal device ops for SideStep, built on libimobiledevice.
 // Replaces the pymobiledevice3 python helpers. No libzip needed.
 //   idevicehelper list
 //   idevicehelper install   <udid> <ipa>
@@ -52,7 +52,7 @@ static int cmd_list(void) {
         char *name = NULL;
         idevice_t d = connect_dev(udid);
         lockdownd_client_t ld = NULL;
-        if (d && lockdownd_client_new_with_handshake(d, &ld, "isideload") == LOCKDOWN_E_SUCCESS) {
+        if (d && lockdownd_client_new_with_handshake(d, &ld, "sidestep") == LOCKDOWN_E_SUCCESS) {
             plist_t v = NULL;
             if (lockdownd_get_value(ld, NULL, "DeviceName", &v) == LOCKDOWN_E_SUCCESS && v) {
                 plist_get_string_val(v, &name);
@@ -72,7 +72,7 @@ static int cmd_uninstall(const char *udid, const char *bid) {
     idevice_t d = connect_dev(udid);
     if (!d) { printf(">>> UNINSTALL FAILED: no device\n"); return 2; }
     lockdownd_client_t ld = NULL;
-    lockdownd_client_new_with_handshake(d, &ld, "isideload");
+    lockdownd_client_new_with_handshake(d, &ld, "sidestep");
     lockdownd_service_descriptor_t svc = NULL;
     lockdownd_start_service(ld, "com.apple.mobile.installation_proxy", &svc);
     instproxy_client_t ip = NULL;
@@ -87,7 +87,7 @@ static int cmd_install(const char *udid, const char *ipa) {
     idevice_t d = connect_dev(udid);
     if (!d) { printf(">>> INSTALL FAILED: no device\n"); return 2; }
     lockdownd_client_t ld = NULL;
-    if (lockdownd_client_new_with_handshake(d, &ld, "isideload") != LOCKDOWN_E_SUCCESS) {
+    if (lockdownd_client_new_with_handshake(d, &ld, "sidestep") != LOCKDOWN_E_SUCCESS) {
         printf(">>> INSTALL FAILED: lockdown handshake\n"); return 2;
     }
     // upload the .ipa into PublicStaging via AFC
@@ -98,7 +98,7 @@ static int cmd_install(const char *udid, const char *ipa) {
     afc_client_t afc = NULL;
     if (afc_client_new(d, afcsvc, &afc) != AFC_E_SUCCESS) { printf(">>> INSTALL FAILED: afc client\n"); return 2; }
     afc_make_directory(afc, "PublicStaging");
-    const char *remote = "PublicStaging/isideload.ipa";
+    const char *remote = "PublicStaging/sidestep.ipa";
     uint64_t h = 0;
     if (afc_file_open(afc, remote, AFC_FOPEN_WRONLY, &h) != AFC_E_SUCCESS) {
         printf(">>> INSTALL FAILED: afc open\n"); return 2;

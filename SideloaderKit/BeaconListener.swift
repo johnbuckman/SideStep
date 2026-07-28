@@ -1,15 +1,15 @@
 // BeaconListener — the Mac half of the wireless self-update loop, native to
-// iSideload (replaces the external Python listener). Listens for UDP beacons
+// SideStep (replaces the external Python listener). Listens for UDP beacons
 // from instrumented apps, learns the device IP from the packet source, and
 // re-signs + pushes the matching tracked app back over Wi-Fi. Also advertises
-// the `_isideload._udp` Bonjour service so beacons can find the Mac by name.
+// the `_sidestep._udp` Bonjour service so beacons can find the Mac by name.
 import Foundation
 
 public final class BeaconListener: NSObject {
     public static let shared = BeaconListener()
     public static let port: UInt16 = 51234
 
-    private let q = DispatchQueue(label: "com.decent.isideload.beacon")
+    private let q = DispatchQueue(label: "com.decent.sidestep.beacon")
     private var source: DispatchSourceRead?
     private var fd: Int32 = -1
     private var advertiser: NetService?
@@ -23,7 +23,7 @@ public final class BeaconListener: NSObject {
             self.log = log
             CrashLog.log("BeaconListener: binding udp/\(BeaconListener.port)…")
             guard self.bind() else { CrashLog.log("BeaconListener: bind FAILED"); return }
-            CrashLog.log("BeaconListener: bound OK; advertising _isideload._udp…")
+            CrashLog.log("BeaconListener: bound OK; advertising _sidestep._udp…")
             self.advertise()
             CrashLog.log("BeaconListener: advertise dispatched OK")
             log("beacon listener up on udp/\(BeaconListener.port)")
@@ -145,7 +145,7 @@ public final class BeaconListener: NSObject {
     // MARK: advertise
 
     private func advertise() {
-        let svc = NetService(domain: "local.", type: "_isideload._udp.", name: "iSideload", port: Int32(BeaconListener.port))
+        let svc = NetService(domain: "local.", type: "_sidestep._udp.", name: "SideStep", port: Int32(BeaconListener.port))
         // NetService needs a run loop; the app has one, and `Provision --listen` runs RunLoop.main.
         DispatchQueue.main.async {
             CrashLog.log("BeaconListener: NetService.publish() on main…")
