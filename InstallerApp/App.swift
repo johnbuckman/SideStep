@@ -611,12 +611,12 @@ struct DevModeHelpView: View {
 
             // Primary path — the option is already waiting on the device.
             VStack(alignment: .leading, spacing: 12) {
-                Text("iSideload has already switched Developer Mode **on** in this device's settings. To finish, on \(deviceName):")
+                Text("iSideload has opened the Developer Mode page on \(deviceName) for you. To finish, on the device:")
                     .fixedSize(horizontal: false, vertical: true)
-                step(1, "Turn **Developer Mode** on.")
+                step(1, "\(deviceName) is now on the right page for you to turn **Developer Mode** On.")
                 step(2, "Tap **Restart** when it asks — the device reboots.")
                 step(3, "After it restarts, tap **Turn On** to confirm.")
-                Text("Then run the install again.")
+                Text("Then try to install your app again.")
                     .font(.callout).foregroundStyle(.secondary).padding(.top, 2)
             }
             .padding(16)
