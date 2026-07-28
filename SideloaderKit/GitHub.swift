@@ -31,6 +31,16 @@ public enum GitHub {
         return try? JSONSerialization.jsonObject(with: d)
     }
 
+    /// Remaining unauthenticated "core" API requests this hour (the budget that the
+    /// per-repo release probes spend). Querying /rate_limit is itself free. nil = unknown.
+    public static func coreRemaining() async -> Int? {
+        guard let obj = await apiJSON("https://api.github.com/rate_limit") as? [String: Any],
+              let res = obj["resources"] as? [String: Any],
+              let core = res["core"] as? [String: Any],
+              let rem = core["remaining"] as? Int else { return nil }
+        return rem
+    }
+
     /// Normalize user input to "owner/name": accepts "owner/name" or a github.com URL.
     public static func normalizeRepo(_ input: String) -> String? {
         var s = input.trimmingCharacters(in: .whitespacesAndNewlines)

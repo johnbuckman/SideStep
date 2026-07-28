@@ -95,6 +95,14 @@ public final class BeaconListener: NSObject {
     }
 
     private func handle(_ text: String, from: sockaddr_in) {
+        // Same-account-on-two-Macs guard: answer a claim if we hold that Apple ID.
+        if text.hasPrefix("SIDESTEP-CLAIM ") {
+            let parts = text.dropFirst("SIDESTEP-CLAIM ".count).split(whereSeparator: { $0 == " " || $0 == "\n" })
+            if parts.count >= 2, LANLock.shouldAnswer(instanceID: String(parts[0]), hash: String(parts[1])) {
+                sendRaw("SIDESTEP-OWNED \(LANLock.hostName())\n", to: from)
+            }
+            return
+        }
         var ipbuf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
         var f = from
         inet_ntop(AF_INET, &f.sin_addr, &ipbuf, socklen_t(INET_ADDRSTRLEN))

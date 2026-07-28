@@ -172,14 +172,29 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var githubQuery = ""
     @Published var githubResults: [GitHub.RepoHit] = []
     @Published var githubSearching = false
+    @Published var githubSearchNote = "No results yet."
 
     // MARK: accounts
 
     func login() {
         guard !appleID.isEmpty, !password.isEmpty else { loginStatus = "Enter Apple ID and password."; return }
+        loginStage = .working; loginStatus = "Checking your network…"
+        let id = appleID, pw = password
+        // Refuse the login if another SideStep on the LAN already holds this Apple ID —
+        // two Macs on one account race on pushes and burn Apple's limits twice as fast.
+        Task { @MainActor in
+            if let owner = await LANLock.ownerOnNetwork(appleID: id) {
+                self.loginStatus = "“\(id)” is already signed in to SideStep on “\(owner)” on this network. Use one Apple ID per Mac — quit SideStep there first, or sign in with a different account here."
+                self.loginStage = .idle
+                return
+            }
+            self.proceedLogin(id: id, pw: pw)
+        }
+    }
+
+    private func proceedLogin(id: String, pw: String) {
         ALTAppleAPI.preferSMSTwoFactorCode = textMeCode
         loginStage = .working; loginStatus = "Signing in…"
-        let id = appleID, pw = password
         DispatchQueue.global().async {
             guard let anisette = Anisette.fresh() else { Task { @MainActor in self.loginStatus = "Anisette failed."; self.loginStage = .idle }; return }
             ALTAppleAPI.sharedAPI.authenticate(appleID: id, password: pw, anisetteData: anisette,
@@ -533,12 +548,20 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     func searchGitHub() {
         let q = githubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
-        githubSearching = true; githubResults = []
+        githubSearching = true; githubResults = []; githubSearchNote = "Searching…"
         Task { @MainActor in
             let hits = await GitHub.searchReposWithIPA(q)
             self.githubResults = hits
             self.githubSearching = false
-            if hits.isEmpty { self.status = "No GitHub repos with an .ipa release matched “\(q)”." }
+            if !hits.isEmpty { self.githubSearchNote = ""; return }
+            // Empty could mean genuinely nothing, or the hourly core budget is spent
+            // (each search probes ~20 repos; unauthenticated GitHub allows only 60/hr).
+            let remaining = await GitHub.coreRemaining()
+            if let r = remaining, r < 3 {
+                self.githubSearchNote = "GitHub's hourly request limit is used up (only 60/hour without a sign-in, and each search checks up to 20 repos). Wait a while and try again — or if you know the app's repo, use “Install from GitHub” by owner/name, which doesn't hit this limit."
+            } else {
+                self.githubSearchNote = "No repositories with an .ipa release matched “\(q)”. (GitHub can't search release files, so this only matches repo names/descriptions — “Install from GitHub” by owner/name is more reliable.)"
+            }
         }
     }
 
@@ -1104,8 +1127,9 @@ struct GitHubSearchView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    if m.githubResults.isEmpty && !m.githubSearching {
-                        Text("No results yet.").font(.callout).foregroundStyle(.secondary)
+                    if m.githubResults.isEmpty {
+                        Text(m.githubSearchNote).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(m.githubResults) { hit in
                         HStack(alignment: .top) {
