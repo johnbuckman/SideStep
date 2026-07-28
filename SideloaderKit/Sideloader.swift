@@ -255,6 +255,7 @@ public struct TrackedApp: Codable, Identifiable {
     public var validityDays: Int = 7   // 7 (free) or 365 (paid)
     public var appIDIdentifier: String = ""   // Apple App-ID id, for deletion
     public var lastInstalled: Double?
+    public var version: String = ""           // the app's CFBundleShortVersionString
     public var githubRepo: String = ""        // "owner/name" if installed from GitHub Releases
     public var githubTag: String = ""         // the release tag of the currently-installed build
     public var id: String { installedBundleID + "@" + udid }
@@ -267,7 +268,7 @@ public struct TrackedApp: Codable, Identifiable {
 
 extension TrackedApp {
     // Lenient decode so entries written before the newer fields still load.
-    enum CodingKeys: String, CodingKey { case name, origBundleID, source, installedBundleID, appleID, udid, deviceName, validityDays, appIDIdentifier, lastInstalled, githubRepo, githubTag }
+    enum CodingKeys: String, CodingKey { case name, origBundleID, source, installedBundleID, appleID, udid, deviceName, validityDays, appIDIdentifier, lastInstalled, version, githubRepo, githubTag }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
@@ -280,6 +281,7 @@ extension TrackedApp {
         validityDays = try c.decodeIfPresent(Int.self, forKey: .validityDays) ?? 7
         appIDIdentifier = try c.decodeIfPresent(String.self, forKey: .appIDIdentifier) ?? ""
         lastInstalled = try c.decodeIfPresent(Double.self, forKey: .lastInstalled)
+        version = try c.decodeIfPresent(String.self, forKey: .version) ?? ""
         githubRepo = try c.decodeIfPresent(String.self, forKey: .githubRepo) ?? ""
         githubTag = try c.decodeIfPresent(String.self, forKey: .githubTag) ?? ""
     }
@@ -608,6 +610,7 @@ public struct Sideloader {
         let displayName = plistValue("CFBundleDisplayName", plist) ?? plistValue("CFBundleName", plist)
             ?? (appPath as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
         let origBundleID = plistValue("CFBundleIdentifier", plist) ?? "app"
+        let appVersion = plistValue("CFBundleShortVersionString", plist) ?? ""
         let bundleID = "com.sidestep.\(sanitize(displayName)).\(team.identifier)".lowercased()
 
         // Cache a copy of the app so future refreshes never need the original json/ipa/URL.
@@ -691,6 +694,7 @@ public struct Sideloader {
                              installedBundleID: bundleID, appleID: account.appleID, udid: iPadUDID,
                              deviceName: deviceName, validityDays: team.type == .free ? 7 : 365,
                              appIDIdentifier: appID.identifier, lastInstalled: Date().timeIntervalSince1970)
+        rec.version = appVersion
         if let github { rec.githubRepo = github.repo; rec.githubTag = github.tag }
         Tracked.upsert(rec)
         AppIconCache.extract(fromApp: cachePath, bundleID: bundleID)   // best-effort icon for the UI

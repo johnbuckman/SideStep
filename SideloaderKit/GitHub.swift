@@ -67,12 +67,16 @@ public enum GitHub {
 
     /// Search repositories by keyword, then keep the ones whose latest release ships
     /// an `.ipa` (each kept hit costs one extra API call, so `limit` is small).
-    public static func searchReposWithIPA(_ query: String, limit: Int = 8) async -> [RepoHit] {
+    public static func searchReposWithIPA(_ query: String, scan: Int = 20) async -> [RepoHit] {
+        // NOTE: GitHub's search API indexes repo name/description/README/topics, NOT
+        // release assets — there is no way to query "repos whose releases contain an
+        // .ipa". So we keyword-match repos, then probe each for an .ipa (one API call
+        // each). `scan` bounds how many candidates we probe against the rate limit.
         let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        guard let obj = await apiJSON("https://api.github.com/search/repositories?q=\(q)&per_page=\(limit)") as? [String: Any],
+        guard let obj = await apiJSON("https://api.github.com/search/repositories?q=\(q)&per_page=\(scan)") as? [String: Any],
               let items = obj["items"] as? [[String: Any]] else { return [] }
         var hits: [RepoHit] = []
-        for it in items.prefix(limit) {
+        for it in items.prefix(scan) {
             guard let full = it["full_name"] as? String else { continue }
             if let ipa = await latestIPA(repo: full) {
                 hits.append(RepoHit(repo: full, description: (it["description"] as? String) ?? "", ipa: ipa))

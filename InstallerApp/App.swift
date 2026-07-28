@@ -357,9 +357,9 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
         a.messageText = "Install from GitHub"
-        a.informativeText = "Enter a GitHub repo (owner/name). SideStep installs the newest .ipa from its Releases and keeps it on the latest release."
-        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        tf.placeholderString = "owner/name"
+        a.informativeText = "Enter a GitHub repo — owner/name, or paste a full URL like https://github.com/owner/name/releases. SideStep installs the newest .ipa from its Releases and keeps it on the latest release."
+        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        tf.placeholderString = "owner/name  or  https://github.com/owner/name"
         a.accessoryView = tf
         a.addButton(withTitle: "Install"); a.addButton(withTitle: "Cancel")
         a.window.initialFirstResponder = tf   // cursor starts in the field
@@ -966,6 +966,14 @@ struct ContentView: View {
                                 HStack(spacing: 6) {
                                     appIcon(bundleID: grp.devices.first?.installedBundleID ?? "")
                                     Text(grp.name).font(.callout)
+                                    if let v = grp.devices.first?.version, !v.isEmpty {
+                                        Text("v\(v)").font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                    if let repo = grp.devices.first?.githubRepo, !repo.isEmpty,
+                                       let url = URL(string: "https://github.com/\(repo)") {
+                                        Text(":").font(.caption2).foregroundStyle(.secondary)
+                                        Link(repo, destination: url).font(.caption2)
+                                    }
                                 }
                             }
                         }
@@ -1085,7 +1093,7 @@ struct GitHubSearchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Search GitHub for iOS apps").font(.headline)
-            Text("Finds repositories whose latest release includes an .ipa. (GitHub search is rate-limited, so results are a handful of top matches.)")
+            Text("Matches repository names/descriptions, then keeps the ones whose releases include an .ipa. GitHub can't search release files directly, so this is best-effort — if you know the repo, “Install from GitHub” by owner/name is more reliable.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 TextField("app name or keywords", text: $m.githubQuery)
