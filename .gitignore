@@ -45,3 +45,4 @@ Helpers/idevice_ipinstall_dbg
 Helpers/idevice_ipprobe
 Helpers/idevice_netinstall
 Helpers/idevice_setwifi
+Helpers/BeaconInject.dylib
