@@ -11,8 +11,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 IDENTITY="${ISIDELOAD_IDENTITY:-Developer ID Application: Vid Tadel (XLS3XF57J8)}"
-VERSION="0.3.2"
-LABEL="0.3.2 alpha"
+VERSION="0.3.3"
+LABEL="0.3.3 alpha"
 OUT="${1:-./dist}"
 ENT="$PWD/iSideload.entitlements"
 

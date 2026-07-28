@@ -781,17 +781,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct InstallerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     init() {
+        CrashLog.bootstrap()                 // crash-safe /tmp/isideload.log, FIRST
+        dlog("App.init: start")
         installDiagnosticsLog()
+        dlog("App.init: diagnostics installed")
         RefreshDaemon.shared.start()
+        dlog("App.init: refresh daemon started")
         // Listen for on-device beacons and push updates over Wi-Fi.
         BeaconListener.shared.start(log: { print("[iSideload beacon] \($0)") })
+        dlog("App.init: beacon listener started")
+        dlog("App.init: populating teams…")
         Sideloader.populateTeamsInBackground()   // so the team picker is ready + refresh honors the choice
         // Launch at login is ON by default — register once on first run; the Settings
         // toggle can turn it off afterwards (we don't re-enable once configured).
         if !UserDefaults.standard.bool(forKey: "isideload.loginItemConfigured") {
+            dlog("App.init: registering login item…")
             try? SMAppService.mainApp.register()
             UserDefaults.standard.set(true, forKey: "isideload.loginItemConfigured")
         }
+        dlog("App.init: done")
     }
     var body: some Scene {
         MenuBarExtra("iSideload", systemImage: "shippingbox") {

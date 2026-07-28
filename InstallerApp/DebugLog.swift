@@ -4,6 +4,59 @@
 // send back the full log.
 import SwiftUI
 import AppKit
+import Darwin
+
+// Crash-safe log at a fixed path, opened first thing and written with raw,
+// unbuffered write() calls — so it survives an immediate exit / crash on launch
+// (when the on-screen Debug Log window never gets a chance to appear). Signal +
+// uncaught-exception handlers record hard crashes with a backtrace.
+enum CrashLog {
+    static let path = "/tmp/isideload.log"
+    static let fd: Int32 = open(path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    // Pre-allocated so the signal handler never calls malloc.
+    static var backtraceBuf = [UnsafeMutableRawPointer?](repeating: nil, count: 128)
+
+    static func raw(_ s: String) {
+        guard fd >= 0 else { return }
+        var b = Array(s.utf8)
+        _ = b.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+    }
+    static func log(_ s: String) {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"
+        raw("[\(f.string(from: Date()))] \(s)\n")
+    }
+    static func bootstrap() {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        raw("\n==== iSideload \(v) launch \(Date()) pid \(getpid()) ====\n")
+        raw("macOS \(ProcessInfo.processInfo.operatingSystemVersionString); bundle \(Bundle.main.bundleURL.path)\n")
+        NSSetUncaughtExceptionHandler { ex in
+            CrashLog.raw("\n!!!! UNCAUGHT EXCEPTION \(ex.name.rawValue): \(ex.reason ?? "")\n")
+            for line in ex.callStackSymbols { CrashLog.raw(line + "\n") }
+        }
+        for s in [SIGSEGV, SIGABRT, SIGILL, SIGBUS, SIGTRAP, SIGFPE] { signal(s, crashSignalHandler) }
+    }
+}
+
+private func writeStatic(_ fd: Int32, _ s: StaticString) {   // allocation-free, signal-safe
+    s.withUTF8Buffer { write(fd, $0.baseAddress, $0.count) }
+}
+private func crashSignalHandler(_ sig: Int32) {
+    let fd = CrashLog.fd
+    writeStatic(fd, "\n!!!! iSideload FATAL SIGNAL ")
+    switch sig {
+    case SIGSEGV: writeStatic(fd, "SIGSEGV")
+    case SIGABRT: writeStatic(fd, "SIGABRT")
+    case SIGILL:  writeStatic(fd, "SIGILL")
+    case SIGBUS:  writeStatic(fd, "SIGBUS")
+    case SIGTRAP: writeStatic(fd, "SIGTRAP")
+    case SIGFPE:  writeStatic(fd, "SIGFPE")
+    default:      writeStatic(fd, "?")
+    }
+    writeStatic(fd, " !!!!\n")
+    let n = backtrace(&CrashLog.backtraceBuf, 128)
+    backtrace_symbols_fd(CrashLog.backtraceBuf, n, fd)
+    signal(sig, SIG_DFL); raise(sig)
+}
 
 final class DebugLog: ObservableObject {
     static let shared = DebugLog()
@@ -24,10 +77,11 @@ final class DebugLog: ObservableObject {
     var fullText: String { q.sync { String(decoding: buf, as: UTF8.self) } }
 }
 
-/// Timestamped log line. Goes through print() so the stdout tap files it too.
+/// Timestamped log line → the crash-safe /tmp log AND (via print → stdout tap)
+/// the on-screen window and ~/Library/Logs.
 func dlog(_ s: String) {
-    let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"
-    print("[\(f.string(from: Date()))] \(s)")
+    CrashLog.log(s)
+    print(s)
 }
 
 struct DebugLogView: View {
