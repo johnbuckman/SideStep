@@ -338,7 +338,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                 case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, log: log)
                 }
                 dlog("execute: install SUCCEEDED — \(result)")
-                await MainActor.run { self.status = result; self.maybeShowTrustHint(udid: udid, appleID: account.appleID) }
+                await MainActor.run { self.status = result; self.maybeShowTrustHint(appleID: account.appleID) }
             } catch {
                 dlog("execute: INSTALL FAILED — \(String(reflecting: error))")
                 await MainActor.run { self.status = "Failed: \(error.localizedDescription)" }
@@ -354,18 +354,18 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     private var udidWindow: NSWindow?
     private var devModeWindow: NSWindow?
 
-    /// The first app installed from a given Apple ID onto a given device needs a
-    /// one-time "trust the developer" tap; every later app from that same account is
-    /// then trusted automatically. iOS exposes no way to read the trust state or to
-    /// open Settings, so we approximate: show the hint ONCE per (device, account),
-    /// then remember it and stay quiet — matching "don't nag once it's trusted".
-    func maybeShowTrustHint(udid: String, appleID: String) {
-        let key = "isideload.trusted.\(udid).\(appleID)"
+    /// The first app installed from a given Apple ID needs a one-time "trust the
+    /// developer" tap; once trusted, every later app from that same account is trusted
+    /// automatically. iOS exposes no way to read the trust state, so we approximate:
+    /// show the hint only on the FIRST install for this Apple ID, then stay quiet —
+    /// if they've installed anything else with this ID, trust is already sorted.
+    func maybeShowTrustHint(appleID: String) {
+        let key = "isideload.trusted.\(appleID)"
         if UserDefaults.standard.bool(forKey: key) { return }
         UserDefaults.standard.set(true, forKey: key)
         let a = NSAlert()
         a.messageText = "One-time step: trust this developer"
-        a.informativeText = "The first time you install from “\(appleID)” on this device, iOS asks you to trust it before the app will open.\n\nOn the device: Settings ▸ General ▸ VPN & Device Management ▸ tap “\(appleID)” ▸ Trust.\n\nApps you install from this account later won't ask again."
+        a.informativeText = "The first time you install from “\(appleID)”, iOS asks you to trust it before the app will open.\n\nOn the device: Settings ▸ General ▸ VPN & Device Management ▸ tap “\(appleID)” ▸ Trust.\n\nApps you install from this account later won't ask again."
         a.addButton(withTitle: "Got it")
         NSApp.activate(ignoringOtherApps: true)
         a.runModal()
