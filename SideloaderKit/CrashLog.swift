@@ -21,6 +21,12 @@ public enum CrashLog {
         raw("[\(f.string(from: Date()))] \(s)\n")
     }
     public static func bootstrap(version: String) {
+        // Ignore SIGPIPE process-wide. installDiagnosticsLog() redirects stdout/
+        // stderr through a pipe; if its read end stalls/closes, a write() to the
+        // redirected fd would otherwise raise SIGPIPE and terminate the app right
+        // after init (observed as EXIT=141 on some Macs). With SIG_IGN the write
+        // just fails with EPIPE. Must run before any pipe I/O is set up.
+        signal(SIGPIPE, SIG_IGN)
         raw("\n==== iSideload \(version) launch \(Date()) pid \(getpid()) ====\n")
         raw("macOS \(ProcessInfo.processInfo.operatingSystemVersionString); bundle \(Bundle.main.bundleURL.path)\n")
         NSSetUncaughtExceptionHandler { ex in

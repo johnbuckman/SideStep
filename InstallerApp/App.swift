@@ -57,6 +57,10 @@ final class RefreshDaemon {
 }
 
 let iSideloadLogPath = (("~/Library/Logs/iSideload.log") as NSString).expandingTildeInPath
+// Held for the process lifetime so the diagnostics pipe's read end never closes.
+private var diagPipe: Pipe?
+private var diagLogFH: FileHandle?
+
 func installDiagnosticsLog() {
     setvbuf(stdout, nil, _IONBF, 0); setvbuf(stderr, nil, _IONBF, 0)
     // Tee stdout+stderr → the on-screen debug log AND the file, so nothing is silent.
@@ -70,6 +74,8 @@ func installDiagnosticsLog() {
     }
     logFH.seekToEndOfFile()
     let pipe = Pipe()
+    diagPipe = pipe        // RETAIN: a local Pipe would dealloc on return, closing the
+    diagLogFH = logFH      // read end → writes to the redirected STDOUT raise SIGPIPE
     dup2(pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
     dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
     pipe.fileHandleForReading.readabilityHandler = { h in
