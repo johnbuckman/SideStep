@@ -293,10 +293,19 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         if accounts.count == 1 {
             guard okToInstall(accounts[0]) else { dlog("startInstall: blocked — team not chosen for \(accounts[0].appleID)"); return }
             chosenAppleID = accounts[0].appleID; resolveDevice()
-        } else { dlog("startInstall: multiple accounts — showing picker"); showAccountPicker = true }
+        } else { dlog("startInstall: multiple accounts — showing picker"); presentAccountPicker() }
+    }
+    // NSAlert, not a SwiftUI popover dialog: the menu-bar popover closes the moment
+    // focus leaves it, which was tearing down every in-panel picker/sheet/textfield.
+    func presentAccountPicker() {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert(); a.messageText = "Which Apple account?"
+        for acc in accounts { a.addButton(withTitle: acc.displayName) }
+        a.addButton(withTitle: "Cancel")
+        let idx = a.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        if idx >= 0 && idx < accounts.count { chooseAccount(accounts[idx].appleID) }
     }
     func chooseAccount(_ id: String) {
-        showAccountPicker = false
         guard let acc = accounts.first(where: { $0.appleID == id }), okToInstall(acc) else { return }
         chosenAppleID = id; resolveDevice()
     }
@@ -322,15 +331,71 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                     return
                 }
                 // ALWAYS let the user choose explicitly — even for a single device — so
-                // an install never silently lands on the wrong one. (OTA-capable apps can
-                // still show the QR option even with no device connected.)
+                // an install never silently lands on the wrong one.
                 self.deviceOptions = devs
-                self.showDevicePicker = true
+                self.presentInstallDialog(devs)
             }
         }
     }
+    /// The consolidated "install to which device?" chooser, as an NSAlert so it works
+    /// even after the menu-bar popover has closed.
+    func presentInstallDialog(_ devs: [DeviceOption]) {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = installAppName.isEmpty ? "Install this app?" : "Do you want to install “\(installAppName)”?"
+        a.informativeText = devs.isEmpty ? "No device is connected." : "Choose the device to install to."
+        for d in devs { a.addButton(withTitle: d.label) }
+        if installOTACapable { a.addButton(withTitle: "Show QR code (over the air)") }
+        a.addButton(withTitle: "Cancel")
+        let idx = a.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        if idx >= 0 && idx < devs.count { chooseDevice(devs[idx].udid) }
+        else if installOTACapable && idx == devs.count { startPendingOTA() }
+    }
+
+    /// Install-from-GitHub prompt (NSAlert with a focused text field — popover-safe).
+    func promptGitHubInstall() {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "Install from GitHub"
+        a.informativeText = "Enter a GitHub repo (owner/name). SideStep installs the newest .ipa from its Releases and keeps it on the latest release."
+        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        tf.placeholderString = "owner/name"
+        a.accessoryView = tf
+        a.addButton(withTitle: "Install"); a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = tf   // cursor starts in the field
+        if a.runModal() == .alertFirstButtonReturn { installFromGitHub(tf.stringValue) }
+    }
+
+    /// AltStore-repo URL prompt (NSAlert with a focused text field).
+    func promptAltStore() {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "Install from AltStore repo"
+        a.informativeText = "Enter the URL of an AltStore-format source (a JSON app catalog)."
+        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        tf.placeholderString = "https://…/apps.json"; tf.stringValue = sourceURL
+        a.accessoryView = tf
+        a.addButton(withTitle: "Load"); a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = tf
+        if a.runModal() == .alertFirstButtonReturn { sourceURL = tf.stringValue; loadSource() }
+    }
+
+    /// Search-GitHub as a standalone window (a sheet inside the popover gets destroyed
+    /// when the popover closes).
+    private var githubWindow: NSWindow?
+    func showGitHubSearchWindow() {
+        if let w = githubWindow { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        let host = NSHostingView(rootView: GitHubSearchView(m: self))
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 440),
+                         styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        w.title = "Search GitHub for iOS apps"
+        w.contentView = host; w.center(); w.isReleasedWhenClosed = false
+        w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        githubWindow = w
+    }
+    func closeGitHubSearch() { githubWindow?.close(); githubWindow = nil }
+
     func chooseDevice(_ udid: String) {
-        showDevicePicker = false
         // If Developer Mode is off on the chosen (USB) device, guide instead of failing.
         if let d = deviceOptions.first(where: { $0.udid == udid }), d.devMode == .disabled {
             status = "Turning on Developer Mode on “\(d.name)”…"
@@ -477,7 +542,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         }
     }
 
-    func installGitHubHit(_ hit: GitHub.RepoHit) { showGitHubSearch = false; installFromGitHub(hit.repo) }
+    func installGitHubHit(_ hit: GitHub.RepoHit) { closeGitHubSearch(); installFromGitHub(hit.repo) }
 
     /// Manually check every GitHub-tracked app for a newer release now.
     func checkGitHubUpdatesNow() {
@@ -965,13 +1030,13 @@ struct ContentView: View {
                     }
                 }
                 HStack {
-                    Button("Install from .ipa…") { m.pickIPA() }.disabled(m.installing)
-                    Button("Install from GitHub…") { m.githubRepoInput = ""; m.showGitHubInstall = true }.disabled(m.installing)
-                    Button("Search GitHub…") { m.showGitHubSearch = true }.disabled(m.installing)
+                    Button("Install from .ipa") { m.pickIPA() }.disabled(m.installing)
+                    Button("Install from GitHub") { m.promptGitHubInstall() }.disabled(m.installing)
+                    Button("Search GitHub") { m.showGitHubSearchWindow() }.disabled(m.installing)
                 }
                 HStack {
-                    Button("Install from AltStore repo…") { m.showAltStorePrompt = true }.disabled(m.installing)
-                    Button("Install from .json…") { m.pickJSON() }.disabled(m.installing)
+                    Button("Install from AltStore repo") { m.promptAltStore() }.disabled(m.installing)
+                    Button("Install from .json") { m.pickJSON() }.disabled(m.installing)
                 }
                   }
                 }.font(.headline)
@@ -1007,26 +1072,10 @@ struct ContentView: View {
         .frame(width: 440)
         .focusEffectDisabled()   // no stray blue keyboard-focus ring when the popover opens
         .onAppear { m.loadAccountInfo() }
-        .confirmationDialog("Which Apple account?", isPresented: $m.showAccountPicker, titleVisibility: .visible) {
-            ForEach(m.accounts) { acc in Button(acc.displayName) { m.chooseAccount(acc.appleID) } }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog("Do you want to install “\(m.installAppName)”?", isPresented: $m.showDevicePicker, titleVisibility: .visible) {
-            ForEach(m.deviceOptions) { d in Button(d.label) { m.chooseDevice(d.udid) } }
-            if m.installOTACapable { Button("Show QR code (over the air)") { m.startPendingOTA() } }
-            Button("Cancel", role: .cancel) {}
-        }
-        .alert("Install from AltStore repo", isPresented: $m.showAltStorePrompt) {
-            TextField("https://…/apps.json", text: $m.sourceURL)
-            Button("Load") { m.loadSource() }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("Enter the URL of an AltStore-format source (a JSON app catalog).") }
-        .alert("Install from GitHub", isPresented: $m.showGitHubInstall) {
-            TextField("owner/name", text: $m.githubRepoInput)
-            Button("Install") { m.installFromGitHub(m.githubRepoInput) }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("Enter a GitHub repo (owner/name). SideStep installs the newest .ipa from its Releases and keeps it on the latest release.") }
-        .sheet(isPresented: $m.showGitHubSearch) { GitHubSearchView(m: m) }
+        // Account/device pickers + GitHub/AltStore prompts + GitHub search are all
+        // presented as NSAlerts / a standalone NSWindow (see AppModel) because a
+        // SwiftUI dialog/sheet/textfield inside the MenuBarExtra popover is destroyed
+        // the moment the popover loses focus.
     }
 }
 
@@ -1067,7 +1116,7 @@ struct GitHubSearchView: View {
                     }
                 }
             }
-            HStack { Spacer(); Button("Done") { m.showGitHubSearch = false } }
+            HStack { Spacer(); Button("Done") { m.closeGitHubSearch() } }
         }
         .padding(16).frame(width: 460, height: 420)
     }
