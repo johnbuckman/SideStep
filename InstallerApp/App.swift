@@ -1271,12 +1271,18 @@ struct RootPanel: View {
     // measurement lands (a 0 frame makes the popover open empty/invisible).
     @State private var contentHeight: CGFloat = 560
     private var maxHeight: CGFloat { (NSScreen.main?.visibleFrame.height ?? 900) - 48 }
+    private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
     var body: some View {
         ScrollView {
             ContentView()
                 .background(GeometryReader { g in
                     Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
                 })
+        }
+        .overlay(alignment: .topTrailing) {
+            Text(appVersion.isEmpty ? "" : "v\(appVersion)")
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.top, 8).padding(.trailing, 12)
         }
         .frame(width: 470, height: min(max(contentHeight, 120), maxHeight))
         .onPreferenceChange(ContentHeightKey.self) { h in
