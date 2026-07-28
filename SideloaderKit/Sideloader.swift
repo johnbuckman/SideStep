@@ -670,7 +670,16 @@ public struct Sideloader {
             // on-device beacon supplies), bypassing usbmux's flaky Bonjour discovery.
             log("Installing by direct IP \(ip)…")
             out = try runStreaming(ipInstallPath(), [iPadUDID, ip, ipa.path], cwd: work, onLine: { log($0) })
-            guard out.contains("DIRECT-IP INSTALL OK") else { throw SideErr.fail("ip install failed: \(out.suffix(200))") }
+            if !out.contains("DIRECT-IP INSTALL OK") {
+                // The most common Wi-Fi failure is that this Mac has never paired with
+                // the device — turn the cryptic "lockdown handshake / err -21 / no pair
+                // record" into plain guidance.
+                let lc = out.lowercased()
+                if lc.contains("pair record") || lc.contains("handshake by ip") || lc.contains("err -21") {
+                    throw SideErr.fail("This device hasn’t been paired with this Mac yet, so it can’t be reached over Wi-Fi. Connect it once with a USB cable, unlock it, and tap “Trust This Computer” — that creates the pairing. After that, keep it unlocked and Wi-Fi installs will work.")
+                }
+                throw SideErr.fail("Wi-Fi install failed. Make sure the device is unlocked and on the same network, then try again. (\(out.suffix(160)))")
+            }
         } else {
             out = try run(helperPath(), ["install", iPadUDID, ipa.path], cwd: work)
             log("install: \(out.split(separator: "\n").last.map(String.init) ?? out)")
