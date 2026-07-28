@@ -255,6 +255,8 @@ public struct TrackedApp: Codable, Identifiable {
     public var validityDays: Int = 7   // 7 (free) or 365 (paid)
     public var appIDIdentifier: String = ""   // Apple App-ID id, for deletion
     public var lastInstalled: Double?
+    public var githubRepo: String = ""        // "owner/name" if installed from GitHub Releases
+    public var githubTag: String = ""         // the release tag of the currently-installed build
     public var id: String { installedBundleID + "@" + udid }
     /// Seconds until the provisioning profile expires (negative = expired).
     public var secondsUntilExpiry: Double? {
@@ -265,7 +267,7 @@ public struct TrackedApp: Codable, Identifiable {
 
 extension TrackedApp {
     // Lenient decode so entries written before the newer fields still load.
-    enum CodingKeys: String, CodingKey { case name, origBundleID, source, installedBundleID, appleID, udid, deviceName, validityDays, appIDIdentifier, lastInstalled }
+    enum CodingKeys: String, CodingKey { case name, origBundleID, source, installedBundleID, appleID, udid, deviceName, validityDays, appIDIdentifier, lastInstalled, githubRepo, githubTag }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
@@ -278,6 +280,8 @@ extension TrackedApp {
         validityDays = try c.decodeIfPresent(Int.self, forKey: .validityDays) ?? 7
         appIDIdentifier = try c.decodeIfPresent(String.self, forKey: .appIDIdentifier) ?? ""
         lastInstalled = try c.decodeIfPresent(Double.self, forKey: .lastInstalled)
+        githubRepo = try c.decodeIfPresent(String.self, forKey: .githubRepo) ?? ""
+        githubTag = try c.decodeIfPresent(String.self, forKey: .githubTag) ?? ""
     }
 }
 
@@ -583,6 +587,7 @@ public struct Sideloader {
     @discardableResult
     public static func install(account: ALTAccount, session: ALTAppleAPISession,
                                appPath: String, source: String, iPadUDID: String,
+                               github: (repo: String, tag: String)? = nil,
                                log: @escaping (String) -> Void) async throws -> String {
         let api = ALTAppleAPI.sharedAPI
 
@@ -673,10 +678,13 @@ public struct Sideloader {
         }
 
         let deviceName = connectedDevices().first(where: { $0.udid == iPadUDID })?.name ?? ""
-        Tracked.upsert(TrackedApp(name: displayName, origBundleID: origBundleID, source: cachePath,
-                                  installedBundleID: bundleID, appleID: account.appleID, udid: iPadUDID,
-                                  deviceName: deviceName, validityDays: team.type == .free ? 7 : 365,
-                                  appIDIdentifier: appID.identifier, lastInstalled: Date().timeIntervalSince1970))
+        var rec = TrackedApp(name: displayName, origBundleID: origBundleID, source: cachePath,
+                             installedBundleID: bundleID, appleID: account.appleID, udid: iPadUDID,
+                             deviceName: deviceName, validityDays: team.type == .free ? 7 : 365,
+                             appIDIdentifier: appID.identifier, lastInstalled: Date().timeIntervalSince1970)
+        if let github { rec.githubRepo = github.repo; rec.githubTag = github.tag }
+        Tracked.upsert(rec)
+        AppIconCache.extract(fromApp: cachePath, bundleID: bundleID)   // best-effort icon for the UI
         try? fm.removeItem(at: work)
         return "✅ Installed \(displayName) (\(bundleID))."
     }
@@ -699,9 +707,10 @@ public struct Sideloader {
     @discardableResult
     public static func installFromIPA(account: ALTAccount, session: ALTAppleAPISession,
                                       filePath: String, iPadUDID: String,
+                                      github: (repo: String, tag: String)? = nil,
                                       log: @escaping (String) -> Void) async throws -> String {
         if filePath.hasSuffix(".app") {
-            return try await install(account: account, session: session, appPath: filePath, source: filePath, iPadUDID: iPadUDID, log: log)
+            return try await install(account: account, session: session, appPath: filePath, source: filePath, iPadUDID: iPadUDID, github: github, log: log)
         }
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-ipa-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -711,7 +720,21 @@ public struct Sideloader {
         guard let appName = apps.first(where: { $0.hasSuffix(".app") }) else { throw SideErr.fail("no .app inside the IPA") }
         return try await install(account: account, session: session,
                                  appPath: payload.appendingPathComponent(appName).path,
-                                 source: filePath, iPadUDID: iPadUDID, log: log)
+                                 source: filePath, iPadUDID: iPadUDID, github: github, log: log)
+    }
+
+    /// Install the newest `.ipa` from a GitHub repo's releases, remembering the repo
+    /// so the daily check + every refresh keep it on the latest release.
+    @discardableResult
+    public static func installFromGitHub(account: ALTAccount, session: ALTAppleAPISession,
+                                         repo: String, iPadUDID: String,
+                                         log: @escaping (String) -> Void) async throws -> String {
+        guard let rel = await GitHub.latestIPA(repo: repo) else { throw SideErr.fail("no .ipa release found in \(repo)") }
+        log("GitHub: \(repo) latest is \(rel.tag) (\(rel.ipaName)) — downloading…")
+        let ipa = try await GitHub.downloadIPA(rel)
+        defer { try? FileManager.default.removeItem(atPath: ipa) }
+        return try await installFromIPA(account: account, session: session, filePath: ipa,
+                                        iPadUDID: iPadUDID, github: (repo, rel.tag), log: log)
     }
 
     /// Free vs paid team info for an account (for showing 7-day vs 1-year).
@@ -725,6 +748,15 @@ public struct Sideloader {
     @discardableResult
     public static func refreshOne(_ t: TrackedApp, log: @escaping (String) -> Void) async throws -> String {
         guard let (account, session) = AccountStore.session(for: t.appleID) else { throw SideErr.fail("account \(t.appleID) not signed in") }
+        // GitHub-sourced apps always push the CURRENT latest release (keeps the device
+        // on the newest build), updating the remembered tag.
+        if !t.githubRepo.isEmpty, let rel = await GitHub.latestIPA(repo: t.githubRepo) {
+            if rel.tag != t.githubTag { log("GitHub: \(t.githubRepo) → \(rel.tag) (was \(t.githubTag.isEmpty ? "none" : t.githubTag))") }
+            let ipa = try await GitHub.downloadIPA(rel)
+            defer { try? FileManager.default.removeItem(atPath: ipa) }
+            return try await installFromIPA(account: account, session: session, filePath: ipa,
+                                            iPadUDID: t.udid, github: (t.githubRepo, rel.tag), log: log)
+        }
         if t.source.hasPrefix("http") {
             let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -732,6 +764,25 @@ public struct Sideloader {
             return try await install(account: account, session: session, appPath: appPath.path, source: t.source, iPadUDID: t.udid, log: log)
         }
         return try await installFromIPA(account: account, session: session, filePath: t.source, iPadUDID: t.udid, log: log)
+    }
+
+    /// Daily sweep: for every GitHub-sourced tracked app whose repo now has a newer
+    /// release tag, re-install the latest build (if its device is reachable). The
+    /// 7-day refresh handles signing expiry; this handles NEW app versions, so each
+    /// app tracks its repo's latest GitHub release.
+    public static func checkGitHubUpdates(log: @escaping (String) -> Void) async {
+        let apps = Tracked.all().filter { !$0.githubRepo.isEmpty }
+        guard !apps.isEmpty else { return }
+        let reachable = Set(connectedDevices().map { $0.udid })
+        for t in apps {
+            guard let rel = await GitHub.latestIPA(repo: t.githubRepo) else { continue }
+            guard rel.tag != t.githubTag else { continue }
+            guard reachable.contains(t.udid) else {
+                log("GitHub: \(t.githubRepo) has \(rel.tag) but \(t.deviceName.isEmpty ? t.udid : t.deviceName) isn't reachable — will retry"); continue
+            }
+            do { let r = try await refreshOne(t, log: log); log("GitHub update → \(r)") }
+            catch { log("GitHub update failed for \(t.githubRepo): \(error)") }
+        }
     }
 
     /// Uninstall from the device, delete its App ID (frees a free-account slot), untrack.

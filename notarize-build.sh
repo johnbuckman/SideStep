@@ -11,9 +11,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 IDENTITY="${SIDESTEP_IDENTITY:-Developer ID Application: Vid Tadel (XLS3XF57J8)}"
-VERSION="0.5.0"          # CFBundleVersion — internal build number
-SHORT_VERSION="0.1-beta" # CFBundleShortVersionString — MUST match the release tag (v0.1-beta)
-LABEL="Beta 0.1"         # so the in-app updater's tag-vs-version comparison works
+VERSION="0.6.0"          # CFBundleVersion — internal build number
+SHORT_VERSION="0.2-beta" # CFBundleShortVersionString — MUST match the release tag (v0.2-beta)
+LABEL="Beta 0.2"         # so the in-app updater's tag-vs-version comparison works
 OUT="${1:-./dist}"
 ENT="$PWD/SideStep.entitlements"
 

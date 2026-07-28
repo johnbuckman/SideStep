@@ -13,8 +13,8 @@
 // "Time since last update" needs no stored state: every push mints a new
 // provisioning profile, so the profile's CreationDate == last-update time.
 //
-// A hidden diagnostic gesture (two fingers held in the top-left AND top-right
-// corners for 1.5s) opens a vitals panel + a Force-update button.
+// A hidden diagnostic gesture (two fingers held in any two of the four screen
+// corners for 1.5s) opens a vitals panel + an "Update app now" button.
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <UIKit/UIGestureRecognizerSubclass.h>
@@ -258,20 +258,27 @@ static NSString *vitalsText(void) {
         UIApplication.sharedApplication.isProtectedDataAvailable ? @"yes" : @"no (locked)"];
 }
 
-// Fires only when TWO fingers are held simultaneously — one top-left, one
-// top-right — for 1.5s. A two-hand, location-locked hold that cannot occur by
-// accident and collides with no iPad system gesture.
+// Fires only when TWO fingers are held simultaneously in ANY two of the four
+// corners (top-left, top-right, bottom-left, bottom-right) — for 1.5s. A
+// two-hand, location-locked hold that cannot occur by accident and collides with
+// no iPad system gesture.
 @interface CornerHoldRecognizer : UIGestureRecognizer @end
 @implementation CornerHoldRecognizer { NSTimer *_t; }
 - (BOOL)cornersHeld {
     UIView *v = self.view;
     if (!v || self.numberOfTouches != 2) return NO;
-    CGFloat W = v.bounds.size.width, C = 140; BOOL left = NO, right = NO;
+    CGFloat W = v.bounds.size.width, H = v.bounds.size.height, C = 140;
+    BOOL tl = NO, tr = NO, bl = NO, br = NO;
     for (NSUInteger i = 0; i < 2; i++) {
         CGPoint p = [self locationOfTouch:i inView:v];
-        if (p.y <= C && p.x <= C) left = YES; else if (p.y <= C && p.x >= W - C) right = YES;
+        BOOL top = p.y <= C, bottom = p.y >= H - C, left = p.x <= C, right = p.x >= W - C;
+        if      (top && left)  tl = YES;
+        else if (top && right) tr = YES;
+        else if (bottom && left)  bl = YES;
+        else if (bottom && right) br = YES;
     }
-    return left && right;
+    // Two touches occupying two DISTINCT corners → any pair of the four corners.
+    return (tl + tr + bl + br) >= 2;
 }
 - (void)cancelTimer { [_t invalidate]; _t = nil; }
 - (void)fire { self.state = [self cornersHeld] ? UIGestureRecognizerStateRecognized : UIGestureRecognizerStateFailed; }

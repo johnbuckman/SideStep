@@ -53,6 +53,14 @@ final class RefreshDaemon {
         if (newlyConnected && !devices.isEmpty) || (fiveMinTick && urgentReachable) {
             Task { try? await Sideloader.refreshAll(log: { print("[SideStep refresh] \($0)") }) }
         }
+
+        // Daily GitHub-release sweep (separate from the 7-day signing refresh): pulls
+        // the newest .ipa for every GitHub-tracked app whose repo has a newer tag.
+        let ghKey = "sidestep.lastGithubCheck"
+        if now - UserDefaults.standard.double(forKey: ghKey) > 24 * 3600 {
+            UserDefaults.standard.set(now, forKey: ghKey)
+            Task { await Sideloader.checkGitHubUpdates(log: { print("[SideStep github] \($0)") }) }
+        }
     }
 }
 
@@ -153,7 +161,17 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     private var pendingKind: InstallKind?
     private var pendingInfo: IPAInfo?         // for the QR/over-the-air path
     private var pendingIPAPath: String?
+    private var pendingGithub: (repo: String, tag: String)?   // set only for a GitHub install
     private var chosenAppleID: String?
+
+    // GitHub + AltStore dialogs
+    @Published var showGitHubInstall = false
+    @Published var githubRepoInput = ""
+    @Published var showAltStorePrompt = false
+    @Published var showGitHubSearch = false
+    @Published var githubQuery = ""
+    @Published var githubResults: [GitHub.RepoHit] = []
+    @Published var githubSearching = false
 
     // MARK: accounts
 
@@ -216,6 +234,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     private var ipaPanelDelegate: IPAPanelDelegate?
 
     func pickIPA() {
+        pendingGithub = nil   // a hand-picked .ipa is not from GitHub
         // The "navigate away and come back to select the .ipa" greying bug is caused
         // by the MIXED file+directory mode: with canChooseDirectories=true, macOS
         // renders plain files disabled until the folder is re-enumerated. A .app is a
@@ -347,14 +366,15 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             return
         }
         installing = true; status = "Installing…"
-        dlog("execute: starting install task for \(account.appleID)")
+        let gh = pendingGithub; pendingGithub = nil   // remember the GitHub source for this install only
+        dlog("execute: starting install task for \(account.appleID)\(gh.map { " (github \($0.repo) \($0.tag))" } ?? "")")
         Task.detached { [weak self] in
             guard let self else { return }
             let log: @Sendable (String) -> Void = { msg in print("[SideStep] \(msg)"); Task { @MainActor in self.status = String(msg.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
             do {
                 let result: String
                 switch kind {
-                case .ipa(let path): result = try await Sideloader.installFromIPA(account: account, session: session, filePath: path, iPadUDID: udid, log: log)
+                case .ipa(let path): result = try await Sideloader.installFromIPA(account: account, session: session, filePath: path, iPadUDID: udid, github: gh, log: log)
                 case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, log: log)
                 }
                 dlog("execute: install SUCCEEDED — \(result)")
@@ -425,6 +445,47 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     func startPendingOTA() {
         showDevicePicker = false
         if let p = pendingIPAPath, let i = pendingInfo { startOTA(path: p, info: i) }
+    }
+
+    // MARK: GitHub
+
+    /// Install the newest .ipa from a GitHub repo (owner/name or a github.com URL),
+    /// remembering the repo so the daily check + every refresh keep it current.
+    func installFromGitHub(_ input: String) {
+        guard let repo = GitHub.normalizeRepo(input) else { status = "Enter a GitHub repo like owner/name."; return }
+        status = "Looking up \(repo) on GitHub…"
+        Task { @MainActor in
+            guard let rel = await GitHub.latestIPA(repo: repo) else { self.status = "No .ipa release found in \(repo)."; return }
+            self.status = "Downloading \(rel.ipaName) (\(rel.tag))…"
+            do {
+                let ipa = try await GitHub.downloadIPA(rel)
+                self.pendingGithub = (repo, rel.tag)   // consumed by execute(), stamped onto the tracked app
+                self.openIPA(ipa)                      // normal inspect → device picker → install flow
+            } catch { self.status = "Download failed: \(error.localizedDescription)" }
+        }
+    }
+
+    func searchGitHub() {
+        let q = githubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        githubSearching = true; githubResults = []
+        Task { @MainActor in
+            let hits = await GitHub.searchReposWithIPA(q)
+            self.githubResults = hits
+            self.githubSearching = false
+            if hits.isEmpty { self.status = "No GitHub repos with an .ipa release matched “\(q)”." }
+        }
+    }
+
+    func installGitHubHit(_ hit: GitHub.RepoHit) { showGitHubSearch = false; installFromGitHub(hit.repo) }
+
+    /// Manually check every GitHub-tracked app for a newer release now.
+    func checkGitHubUpdatesNow() {
+        status = "Checking GitHub apps for updates…"
+        Task.detached { [weak self] in
+            await Sideloader.checkGitHubUpdates(log: { print("[SideStep github] \($0)") })
+            await MainActor.run { self?.tracked = Tracked.all(); self?.status = "GitHub update check complete." }
+        }
     }
 
     private func startOTA(path: String, info: IPAInfo) {
@@ -778,6 +839,17 @@ struct ContentView: View {
     @ObservedObject private var m = AppModel.shared
     @State private var accountsExpanded = true
     @State private var installExpanded = true
+    @State private var settingsExpanded = false
+
+    /// The installed app's real icon (cached at install), or the generic symbol.
+    @ViewBuilder private func appIcon(bundleID: String) -> some View {
+        if !bundleID.isEmpty, let img = NSImage(contentsOfFile: AppIconCache.path(bundleID: bundleID)) {
+            Image(nsImage: img).resizable().interpolation(.high)
+                .frame(width: 22, height: 22).clipShape(RoundedRectangle(cornerRadius: 5))
+        } else {
+            Image(systemName: "square.grid.2x2.fill").frame(width: 20).foregroundStyle(.secondary)
+        }
+    }
     @State private var collapsedAccounts = Set<String>()   // ids stored when COLLAPSED (default expanded)
     @State private var collapsedApps = Set<String>()
 
@@ -827,7 +899,7 @@ struct ContentView: View {
                                 }
                             } label: {
                                 HStack(spacing: 6) {
-                                    Image(systemName: "square.grid.2x2.fill").frame(width: 20).foregroundStyle(.secondary)
+                                    appIcon(bundleID: grp.devices.first?.installedBundleID ?? "")
                                     Text(grp.name).font(.callout)
                                 }
                             }
@@ -882,10 +954,6 @@ struct ContentView: View {
                 Divider()
                 DisclosureGroup("Install", isExpanded: $installExpanded) {
                   VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    TextField("Source URL (AltStore repo)", text: $m.sourceURL).textFieldStyle(.roundedBorder)
-                    Button("Load") { m.loadSource() }.disabled(m.installing)
-                }
                 ForEach(m.sourceApps) { app in
                     HStack {
                         VStack(alignment: .leading, spacing: 1) {
@@ -897,24 +965,32 @@ struct ContentView: View {
                     }
                 }
                 HStack {
-                    Button("Install from .json…") { m.pickJSON() }.disabled(m.installing)
                     Button("Install from .ipa…") { m.pickIPA() }.disabled(m.installing)
-                    Button("Register a device over Wi-Fi…") { m.captureUDID() }.disabled(m.installing)
+                    Button("Install from GitHub…") { m.githubRepoInput = ""; m.showGitHubInstall = true }.disabled(m.installing)
+                    Button("Search GitHub…") { m.showGitHubSearch = true }.disabled(m.installing)
+                }
+                HStack {
+                    Button("Install from AltStore repo…") { m.showAltStorePrompt = true }.disabled(m.installing)
+                    Button("Install from .json…") { m.pickJSON() }.disabled(m.installing)
                 }
                   }
                 }.font(.headline)
             }
 
             Divider()
-            DisclosureGroup("Settings") {
+            DisclosureGroup(isExpanded: $settingsExpanded) {
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("Launch SideStep at login (keeps apps auto-refreshed)", isOn: Binding(get: { m.launchAtLogin }, set: { m.setLaunchAtLogin($0) }))
                     Button("Refresh all apps now") { m.refreshAllNow() }.disabled(m.installing)
+                    Button("Check GitHub apps for updates now") { m.checkGitHubUpdatesNow() }.disabled(m.installing)
                     Button("Check for Updates…") { Task { await UpdateChecker.shared.check(userInitiated: true) } }
                     Button("Show Debug Log…") { DebugWindow.show() }
                     Text("SideStep keeps apps signed while it runs in the menu bar — it re-signs automatically when you plug in a device and every couple of hours. No separate background program is needed.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(.top, 2)
+            } label: {
+                // Whole "Settings" word toggles, not just the chevron.
+                Text("Settings").contentShape(Rectangle()).onTapGesture { settingsExpanded.toggle() }
             }.font(.callout)
 
             HStack {
@@ -940,6 +1016,60 @@ struct ContentView: View {
             if m.installOTACapable { Button("Show QR code (over the air)") { m.startPendingOTA() } }
             Button("Cancel", role: .cancel) {}
         }
+        .alert("Install from AltStore repo", isPresented: $m.showAltStorePrompt) {
+            TextField("https://…/apps.json", text: $m.sourceURL)
+            Button("Load") { m.loadSource() }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Enter the URL of an AltStore-format source (a JSON app catalog).") }
+        .alert("Install from GitHub", isPresented: $m.showGitHubInstall) {
+            TextField("owner/name", text: $m.githubRepoInput)
+            Button("Install") { m.installFromGitHub(m.githubRepoInput) }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Enter a GitHub repo (owner/name). SideStep installs the newest .ipa from its Releases and keeps it on the latest release.") }
+        .sheet(isPresented: $m.showGitHubSearch) { GitHubSearchView(m: m) }
+    }
+}
+
+/// Search GitHub for repos that ship an installable `.ipa`, and install one.
+struct GitHubSearchView: View {
+    @ObservedObject var m: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Search GitHub for iOS apps").font(.headline)
+            Text("Finds repositories whose latest release includes an .ipa. (GitHub search is rate-limited, so results are a handful of top matches.)")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                TextField("app name or keywords", text: $m.githubQuery)
+                    .textFieldStyle(.roundedBorder).onSubmit { m.searchGitHub() }
+                Button("Search") { m.searchGitHub() }.keyboardShortcut(.defaultAction).disabled(m.githubSearching)
+                if m.githubSearching { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
+            }
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if m.githubResults.isEmpty && !m.githubSearching {
+                        Text("No results yet.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    ForEach(m.githubResults) { hit in
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(hit.repo).font(.callout.weight(.medium))
+                                if !hit.description.isEmpty {
+                                    Text(hit.description).font(.caption2).foregroundStyle(.secondary)
+                                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                                }
+                                if let ipa = hit.ipa { Text("latest: \(ipa.tag) · \(ipa.ipaName)").font(.caption2).foregroundStyle(.tertiary) }
+                            }
+                            Spacer()
+                            Button("Install") { m.installGitHubHit(hit) }.disabled(m.installing)
+                        }
+                        Divider()
+                    }
+                }
+            }
+            HStack { Spacer(); Button("Done") { m.showGitHubSearch = false } }
+        }
+        .padding(16).frame(width: 460, height: 420)
     }
 }
 
