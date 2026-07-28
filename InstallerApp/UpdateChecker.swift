@@ -40,12 +40,17 @@ final class UpdateChecker {
         UserDefaults.standard.set(Date(), forKey: lastCheckKey)
         guard let release = await fetchLatestRelease() else {
             if userInitiated {
-                if let r = await GitHub.coreRemaining(), r < 2 {
-                    alert("Couldn’t Check for Updates",
-                          "GitHub’s hourly request limit is used up (60/hour without a sign-in). Please try again in a little while.")
-                } else {
-                    alert("Couldn’t Check for Updates", "Please try again later.")
-                }
+                let rateLimited = (await GitHub.coreRemaining()).map { $0 < 2 } ?? false
+                let text = rateLimited
+                    ? "SideStep checks for updates through GitHub, and GitHub’s hourly request limit for this network is used up (60 requests/hour without a sign-in). This usually clears within the hour. You can wait and try again, or download the latest version directly from the Releases page."
+                    : "SideStep couldn’t reach GitHub to check for a new version — likely no internet connection, or GitHub is briefly unavailable. Check your connection and try again, or download the latest version directly from the Releases page."
+                let a = NSAlert()
+                a.messageText = "Couldn’t Check for Updates"
+                a.informativeText = text
+                a.addButton(withTitle: "Open Releases Page")
+                a.addButton(withTitle: "OK")
+                NSApp.activate(ignoringOtherApps: true)
+                if a.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(releasesPage) }
             }
             return
         }
