@@ -221,12 +221,22 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseFiles = true
-        panel.canChooseDirectories = false           // ← was true; that caused the greying
+        panel.canChooseDirectories = false
         panel.treatsFilePackagesAsDirectories = false  // keep .app selectable as one file
         panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         panel.prompt = "Install"
         dlog("pickIPA: opening file panel")
-        guard panel.runModal() == .OK, let url = panel.url else { dlog("pickIPA: cancelled"); return }
+        // THE greying bug: iSideload is a menu-bar (.accessory / LSUIElement) app, and
+        // an accessory app can't make a modal open-panel the KEY window — so its file
+        // list renders disabled until you navigate (the "go away and come back" fix is
+        // really just forcing a re-render once focus settles). Become a regular,
+        // focusable app for the duration of the panel, then restore accessory mode.
+        let prevPolicy = NSApp.activationPolicy()
+        if prevPolicy != .regular { NSApp.setActivationPolicy(.regular) }
+        NSApp.activate(ignoringOtherApps: true)
+        let resp = panel.runModal()
+        if prevPolicy != .regular { NSApp.setActivationPolicy(prevPolicy) }
+        guard resp == .OK, let url = panel.url else { dlog("pickIPA: cancelled"); return }
         let ext = url.pathExtension.lowercased()
         dlog("pickIPA: chose \(url.path) (ext=\(ext))")
         if ext == "ipa" || ext == "app" { openIPA(url.path) }

@@ -394,16 +394,18 @@ public struct Sideloader {
 
     public enum DevModeEnable { case enabled, rebooting, needsManual, unknown }
 
-    /// Try to turn Developer Mode ON directly. This SUCCEEDS only if the device has
-    /// no passcode (iOS then arms it and reboots). With a passcode set, iOS refuses
-    /// and the tool falls back to revealing the Settings row — the user must flip it
-    /// themselves (there is NO API to open/navigate the device's Settings app). This
-    /// call also reveals the row as a side effect, so the option is always surfaced.
-    /// Blocks briefly; call off the main thread.
+    /// Try to turn Developer Mode ON directly. Uses `arm` (NOT `enable`): arm returns
+    /// immediately after asking iOS to reboot into Developer Mode, whereas `enable`
+    /// blocks ~100s waiting for the whole reboot/reconnect cycle (which looks like a
+    /// hang). This SUCCEEDS only when the device is unlocked, trusted, and has NO
+    /// passcode — iOS then reboots and, on unlock, prompts the user to confirm. With a
+    /// passcode iOS refuses, and the tool reveals the Settings row instead; the user
+    /// must flip it (there is NO API to open/navigate the device's Settings app). Call
+    /// off the main thread. The full command output is logged for diagnosis.
     public static func tryEnableDeveloperMode(_ udid: String) -> DevModeEnable {
-        guard let out = try? run(devModeCtlPath(), ["-u", udid, "enable"]) else { return .unknown }
+        guard let out = try? run(devModeCtlPath(), ["-u", udid, "arm"]) else { return .unknown }
         let l = out.lowercased()
-        print("[iSideload] tryEnableDeveloperMode: \(out.replacingOccurrences(of: "\n", with: " ⏎ "))")
+        print("[iSideload] tryEnableDeveloperMode(arm): \(out.replacingOccurrences(of: "\n", with: " ⏎ "))")
         if l.contains("already enabled") || l.contains("successfully enabled") { return .enabled }
         if l.contains("armed") || l.contains("will reboot") || l.contains("waiting for reboot") { return .rebooting }
         if l.contains("passcode") || l.contains("on the device itself") { return .needsManual }
