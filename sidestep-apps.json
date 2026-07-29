@@ -9,7 +9,6 @@
       "bundleIdentifier": "com.magnatune.player",
       "developerName": "Magnatune",
       "localizedDescription": "The Magnatune music player — stream and download the full Magnatune catalog of independent, artist-friendly music. Not available on the App Store; installable by sideloading with your own Apple ID.",
-      "iconURL": "https://raw.githubusercontent.com/johnbuckman/magnatune-app/main/icon.png",
       "versions": [
         {
           "version": "0.2.2",
@@ -23,7 +22,6 @@
       "bundleIdentifier": "com.decent.iwish",
       "developerName": "John Buckman",
       "localizedDescription": "iWish brings Tcl/Tk to iOS — a full scripting language and native GUI toolkit running on your iPhone or iPad. A developer/power-user environment Apple does not distribute on the App Store.",
-      "iconURL": "https://raw.githubusercontent.com/johnbuckman/iwish/main/icon.png",
       "versions": [
         {
           "version": "0.2.2",
