@@ -19,7 +19,7 @@ AltStore/SideStore that signs on the Mac.
 
 ## Download
 
-**[⬇︎ SideStep Beta 0.2.1 (notarized `.dmg`)](https://github.com/johnbuckman/SideStep/releases/tag/v0.2.1)** — macOS 14 (Sonoma) or newer, Apple Silicon.
+**[⬇︎ SideStep Beta 0.2.2 (notarized `.dmg`)](https://github.com/johnbuckman/SideStep/releases/tag/v0.2.2)** — macOS 14 (Sonoma) or newer, Apple Silicon.
 
 Open the `.dmg` and drag **SideStep** to **Applications**. It's signed with a
 Developer ID and notarized by Apple, so it opens normally — no right-click /
