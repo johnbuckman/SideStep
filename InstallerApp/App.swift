@@ -1179,14 +1179,19 @@ struct AltStoreSearchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Install apps from AltStore sources").font(.headline)
-            Text("Searches curated AltStore catalogs (open-source apps, emulators, official apps). Uses plain source JSON — no GitHub rate limits.")
+            Text("Browse and filter curated AltStore catalogs (open-source apps, emulators, official apps). Plain source JSON — no GitHub rate limits. These are apps distributed as sideloadable .ipa files; App Store apps and EU-marketplace apps (e.g. Fortnite via Epic/AltStore PAL) aren’t here.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
-                TextField("search apps…", text: $m.altStoreQuery).textFieldStyle(.roundedBorder)
+                TextField("filter apps by name…", text: $m.altStoreQuery).textFieldStyle(.roundedBorder)
                     .onChange(of: m.altStoreQuery) { _ in m.filterAltStore() }
                 if m.altStoreLoading { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
                 Button("Reload") { m.loadAltStore(force: true) }.disabled(m.altStoreLoading)
             }
+            Text(m.altStoreLoading ? "Loading catalog…"
+                 : m.altStoreQuery.isEmpty
+                   ? "Showing all \(m.altStoreResults.count) apps from \(m.altStoreSources.count) sources — type above to filter."
+                   : "\(m.altStoreResults.count) app\(m.altStoreResults.count == 1 ? "" : "s") match “\(m.altStoreQuery)”.")
+                .font(.caption2).foregroundStyle(.secondary)
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
