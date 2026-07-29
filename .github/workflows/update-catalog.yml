@@ -1,0 +1,39 @@
+name: Update app catalog
+
+# Keeps sidestep-apps.json pointing at each app's newest .ipa release, and republishes
+# it to the "apps" release. Free on public repos; uses the built-in GITHUB_TOKEN.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # daily at 06:17 UTC
+  workflow_dispatch: {}     # allow manual "Run workflow"
+
+permissions:
+  contents: write            # commit the updated JSON + upload the release asset
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refresh versions from source repos
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/update_catalog.py
+
+      - name: Commit + republish if changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- sidestep-apps.json; then
+            echo "No catalog changes."
+            exit 0
+          fi
+          git config user.name  "sidestep-catalog-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sidestep-apps.json
+          git commit -m "catalog: auto-update app versions"
+          git push
+          gh release upload apps sidestep-apps.json --clobber
+          echo "Catalog updated and republished."
