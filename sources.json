@@ -2,6 +2,7 @@
   "_comment": "SideStep's default AltStore-format app sources. SideStep fetches this list and lets users search across these catalogs. To propose a source, send a pull request adding its URL below. RULES: (1) LEGITIMATE apps only — open-source projects, emulators, official app repos, and EU alternative-marketplace (AltStore PAL) apps. No pirated/cracked/tweaked App Store apps. (2) The source's downloadURL must be a directly fetchable .ipa. Marketplace sources that gate downloads behind auth/DRM (e.g. Epic Games Store, whose .ipa URLs return HTTP 403) do NOT work with SideStep and will not be merged.",
   "_note_eu": "EU alternative-marketplace (AltStore PAL) apps that publish a normal .ipa are installable OUTSIDE the EU too — this is a legitimate use of SideStep: Apple is not required to distribute these apps to you, yet you can still sideload them with your own Apple ID.",
   "sources": [
+    "https://github.com/johnbuckman/SideStep/releases/download/apps/sidestep-apps.json",
     "https://apps.altstore.io",
     "https://altstore.oatmealdome.me",
     "https://alt.getutm.app",

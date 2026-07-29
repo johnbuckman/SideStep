@@ -1,0 +1,36 @@
+{
+  "name": "SideStep Apps",
+  "identifier": "com.decent.sidestep.apps",
+  "sourceURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/sidestep-apps.json",
+  "_comment": "SideStep's own curated list of legitimate, sideloadable iOS apps distributed as .ipa files. Published as a GitHub release asset (tag 'apps'); the URL above is always the latest. To propose an app, send a pull request updating this file in johnbuckman/SideStep.",
+  "apps": [
+    {
+      "name": "Magnatune",
+      "bundleIdentifier": "com.magnatune.player",
+      "developerName": "Magnatune",
+      "localizedDescription": "The Magnatune music player — stream and download the full Magnatune catalog of independent, artist-friendly music. Not available on the App Store; installable by sideloading with your own Apple ID.",
+      "iconURL": "https://raw.githubusercontent.com/johnbuckman/magnatune-app/main/icon.png",
+      "versions": [
+        {
+          "version": "0.2.2",
+          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v0.2.2/Magnatune-v0.2.2-unsigned.ipa",
+          "size": 7168339
+        }
+      ]
+    },
+    {
+      "name": "iWish",
+      "bundleIdentifier": "com.decent.iwish",
+      "developerName": "John Buckman",
+      "localizedDescription": "iWish brings Tcl/Tk to iOS — a full scripting language and native GUI toolkit running on your iPhone or iPad. A developer/power-user environment Apple does not distribute on the App Store.",
+      "iconURL": "https://raw.githubusercontent.com/johnbuckman/iwish/main/icon.png",
+      "versions": [
+        {
+          "version": "0.2.2",
+          "downloadURL": "https://github.com/johnbuckman/iwish/releases/download/v0.2.2/iWish.ipa",
+          "size": 27481737
+        }
+      ]
+    }
+  ]
+}
