@@ -33,6 +33,16 @@
       "versions": [
         { "version": "0.7.15-beta.1", "downloadURL": "https://github.com/tadelv/reaprime/releases/download/v0.7.15-beta.1/decent-ios-unsigned-0.7.15-beta.1.ipa", "size": 52405857 }
       ]
+    },
+    {
+      "name": "Decent Timer",
+      "bundleIdentifier": "com.decentespresso.kitchentimer",
+      "developerName": "John Buckman",
+      "localizedDescription": "A simple kitchen timer that runs on older iPads (iOS 15+) that the App Store no longer supports — a good example of keeping an old device useful by sideloading.",
+      "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/timer-icon.png",
+      "versions": [
+        { "version": "1.0-beta", "downloadURL": "https://github.com/johnbuckman/Kitchen-timer-for-old-iPads/releases/download/v1.0-beta/DecentTimer-1.0-beta.ipa", "size": 180448 }
+      ]
     }
   ]
 }
