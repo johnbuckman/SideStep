@@ -599,9 +599,11 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         }
     }
     func filterAltStore() {
-        altStoreResults = AltStoreCatalog.search(altStoreQuery, in: altStoreAllApps)
+        let q = altStoreQuery.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { altStoreResults = []; return }   // nothing until you type
+        altStoreResults = AltStoreCatalog.search(q, in: altStoreAllApps)
         if altStoreResults.isEmpty && !altStoreLoading && !altStoreAllApps.isEmpty {
-            altStoreNote = "No apps match “\(altStoreQuery)”."
+            altStoreNote = "No apps match “\(q)”."
         }
     }
     func installAltStoreApp(_ app: SourceApp) { closeAltStoreSearch(); startInstall(.source(app)) }
@@ -1188,15 +1190,18 @@ struct AltStoreSearchView: View {
                 Button("Reload") { m.loadAltStore(force: true) }.disabled(m.altStoreLoading)
             }
             Text(m.altStoreLoading ? "Loading catalog…"
-                 : m.altStoreQuery.isEmpty
-                   ? "Showing all \(m.altStoreResults.count) apps from \(m.altStoreSources.count) sources — type above to filter."
+                 : m.altStoreQuery.trimmingCharacters(in: .whitespaces).isEmpty
+                   ? "Type above to search \(m.altStoreAllApps.count) apps across \(m.altStoreSources.count) sources."
                    : "\(m.altStoreResults.count) app\(m.altStoreResults.count == 1 ? "" : "s") match “\(m.altStoreQuery)”.")
                 .font(.caption2).foregroundStyle(.secondary)
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if m.altStoreResults.isEmpty {
-                        Text(m.altStoreNote).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(m.altStoreLoading ? "Loading catalog…"
+                             : m.altStoreQuery.trimmingCharacters(in: .whitespaces).isEmpty ? "Type an app name above to search."
+                             : m.altStoreNote)
+                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(m.altStoreResults) { app in
                         HStack(alignment: .top, spacing: 8) {
