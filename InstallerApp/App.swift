@@ -599,11 +599,10 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         }
     }
     func filterAltStore() {
-        let q = altStoreQuery.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { altStoreResults = []; return }   // nothing until you type
-        altStoreResults = AltStoreCatalog.search(q, in: altStoreAllApps)
+        // Empty query → all apps (AltStoreCatalog.search returns everything).
+        altStoreResults = AltStoreCatalog.search(altStoreQuery, in: altStoreAllApps)
         if altStoreResults.isEmpty && !altStoreLoading && !altStoreAllApps.isEmpty {
-            altStoreNote = "No apps match “\(q)”."
+            altStoreNote = "No apps match “\(altStoreQuery)”."
         }
     }
     func installAltStoreApp(_ app: SourceApp) { closeAltStoreSearch(); startInstall(.source(app)) }
@@ -1191,16 +1190,14 @@ struct AltStoreSearchView: View {
             }
             Text(m.altStoreLoading ? "Loading catalog…"
                  : m.altStoreQuery.trimmingCharacters(in: .whitespaces).isEmpty
-                   ? "Type above to search \(m.altStoreAllApps.count) apps across \(m.altStoreSources.count) sources."
+                   ? "Showing all \(m.altStoreResults.count) apps across \(m.altStoreSources.count) sources — type to filter."
                    : "\(m.altStoreResults.count) app\(m.altStoreResults.count == 1 ? "" : "s") match “\(m.altStoreQuery)”.")
                 .font(.caption2).foregroundStyle(.secondary)
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if m.altStoreResults.isEmpty {
-                        Text(m.altStoreLoading ? "Loading catalog…"
-                             : m.altStoreQuery.trimmingCharacters(in: .whitespaces).isEmpty ? "Type an app name above to search."
-                             : m.altStoreNote)
+                        Text(m.altStoreLoading ? "Loading catalog…" : m.altStoreNote)
                             .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     ForEach(m.altStoreResults) { app in
