@@ -1441,7 +1441,7 @@ struct RootPanel: View {
                 .font(.caption2).foregroundStyle(.secondary)
                 .padding(.top, 8).padding(.trailing, 12)
         }
-        .frame(width: 470, height: min(max(contentHeight, 120), maxHeight))
+        .frame(width: 470, height: min(max(contentHeight, 120) * 1.5, maxHeight))   // 50% taller
         .onPreferenceChange(ContentHeightKey.self) { h in
             if h > 1 { contentHeight = h }
         }

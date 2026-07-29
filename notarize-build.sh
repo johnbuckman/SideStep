@@ -11,9 +11,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 IDENTITY="${SIDESTEP_IDENTITY:-Developer ID Application: Vid Tadel (XLS3XF57J8)}"
-VERSION="0.6.0"          # CFBundleVersion — internal build number
-SHORT_VERSION="0.2-beta" # CFBundleShortVersionString — MUST match the release tag (v0.2-beta)
-LABEL="Beta 0.2"         # so the in-app updater's tag-vs-version comparison works
+# Version comes from VERSION.txt and auto-increments its patch number every build
+# (0.2.1 → 0.2.2 → …). CFBundleShortVersionString == the release tag, so the in-app
+# updater's tag-vs-version comparison works.
+SHORT_VERSION="$(tr -d ' \n' < VERSION.txt)"
+VERSION="$SHORT_VERSION"
+LABEL="Beta $SHORT_VERSION"
 OUT="${1:-./dist}"
 ENT="$PWD/SideStep.entitlements"
 
@@ -72,7 +75,7 @@ echo "==> Verifying signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 mkdir -p "$OUT"
-DMG="$OUT/SideStep-${VERSION}-beta.dmg"
+DMG="$OUT/SideStep-${SHORT_VERSION}.dmg"
 rm -f "$DMG"
 DMGSTAGE=$(mktemp -d)
 cp -R "$APP" "$DMGSTAGE/SideStep.app"
@@ -82,5 +85,9 @@ hdiutil create -volname "SideStep $LABEL" -srcfolder "$DMGSTAGE" -ov -format UDZ
 codesign --force --timestamp -s "$IDENTITY" "$DMG"
 
 rm -rf "$STAGE" "$DMGSTAGE"
-echo "==> Done: $DMG"
+
+# Auto-increment the patch number for the NEXT build (0.2.1 → 0.2.2 → …).
+NEXT="$(python3 -c "v='$SHORT_VERSION'.split('.'); v[-1]=str(int(v[-1])+1); print('.'.join(v))")"
+echo "$NEXT" > VERSION.txt
+echo "==> Done: $DMG   (next build will be $NEXT)"
 echo "    Next: notarytool submit \"$DMG\" --keychain-profile <profile> --wait && stapler staple \"$DMG\""
