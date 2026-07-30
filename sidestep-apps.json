@@ -11,7 +11,11 @@
       "localizedDescription": "The Magnatune music player — stream and download the full Magnatune catalog of independent, artist-friendly music. Not available on the App Store; installable by sideloading with your own Apple ID.",
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/magnatune-icon.png",
       "versions": [
-        { "version": "0.2.2", "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v0.2.2/Magnatune-v0.2.2-unsigned.ipa", "size": 7168339 }
+        {
+          "version": "1.0.1",
+          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.0.1/Magnatune-v1.0.1-unsigned.ipa",
+          "size": 7175919
+        }
       ]
     },
     {
@@ -21,7 +25,11 @@
       "localizedDescription": "iWish brings Tcl/Tk to iOS — a full scripting language and native GUI toolkit running on your iPhone or iPad. A developer/power-user environment Apple does not distribute on the App Store.",
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/iwish-icon.png",
       "versions": [
-        { "version": "0.2.2", "downloadURL": "https://github.com/johnbuckman/iwish/releases/download/v0.2.2/iWish.ipa", "size": 27481737 }
+        {
+          "version": "0.2.2",
+          "downloadURL": "https://github.com/johnbuckman/iwish/releases/download/v0.2.2/iWish.ipa",
+          "size": 27481737
+        }
       ]
     },
     {
@@ -31,7 +39,11 @@
       "localizedDescription": "reaprime — an open-source iOS controller for the Decent Espresso machine, by Vid Tadel. Sideload it directly with your own Apple ID.",
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/reaprime-icon.png",
       "versions": [
-        { "version": "0.7.15-beta.1", "downloadURL": "https://github.com/tadelv/reaprime/releases/download/v0.7.15-beta.1/decent-ios-unsigned-0.7.15-beta.1.ipa", "size": 52405857 }
+        {
+          "version": "0.7.15-beta.1",
+          "downloadURL": "https://github.com/tadelv/reaprime/releases/download/v0.7.15-beta.1/decent-ios-unsigned-0.7.15-beta.1.ipa",
+          "size": 52405857
+        }
       ]
     },
     {
@@ -41,7 +53,11 @@
       "localizedDescription": "A simple kitchen timer that runs on older iPads (iOS 15+) that the App Store no longer supports — a good example of keeping an old device useful by sideloading.",
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/timer-icon.png",
       "versions": [
-        { "version": "1.0-beta", "downloadURL": "https://github.com/johnbuckman/Kitchen-timer-for-old-iPads/releases/download/v1.0-beta/DecentTimer-1.0-beta.ipa", "size": 180448 }
+        {
+          "version": "1.0-beta",
+          "downloadURL": "https://github.com/johnbuckman/Kitchen-timer-for-old-iPads/releases/download/v1.0-beta/DecentTimer-1.0-beta.ipa",
+          "size": 180448
+        }
       ]
     }
   ]
