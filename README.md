@@ -69,9 +69,29 @@ with no Dock icon. Click it to open the panel below.
    same account afterwards is trusted automatically.
 
 <p align="center">
+  <img src="docs/screenshots/devmode-find.png" width="215" alt="Finding Developer Mode in iOS Settings">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/devmode-on.png" width="215" alt="The Developer Mode toggle turned on">
+  <br>
+  <em>Step 4 — Settings ▸ Privacy &amp; Security ▸ Developer Mode, then switch it on (the device restarts once).</em>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/search-decent.jpg" width="460" alt="Searching SideStep's catalog and clicking Install">
   <br>
   <em>Step 5 — search the catalog and click Install.</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/trust-1-open.png" width="165" alt="The Developer App shown as Not Trusted">
+  &nbsp;
+  <img src="docs/screenshots/trust-2-tap-trust.png" width="165" alt="Tapping Trust for your Apple ID">
+  &nbsp;
+  <img src="docs/screenshots/trust-3-allow.png" width="165" alt="Confirming with Allow">
+  &nbsp;
+  <img src="docs/screenshots/trust-4-done.png" width="165" alt="The Apple ID now trusted, app Verified">
+  <br>
+  <em>Step 6 (first time only) — Settings ▸ General ▸ VPN &amp; Device Management ▸ tap your Apple ID ▸ <strong>Trust</strong> ▸ <strong>Allow</strong>. It then shows as Verified.</em>
 </p>
 
 After the first install, adding more apps works over Wi-Fi: as long as the device
@@ -149,6 +169,41 @@ on an iPad and talking to Bluetooth hardware.
 - **There's nothing central to shut off.** No server, no shared certificate — each
   app is signed by your Apple ID for your device. The Mac app is open source and
   Apple-notarized.
+
+## If your app does expire
+
+Apple's free signatures last 7 days, and SideStep normally re-signs your apps well
+before then, in the background. But if a device is switched off or off the network
+for longer than that — for example an iPad that runs out of battery and sits unused
+for a couple of weeks — its apps' signatures can lapse, and those apps won't open
+until they're re-signed.
+
+Getting them back is quick:
+
+1. Turn the iPad on, **unlock it**, and make sure it's on the same Wi-Fi as your Mac
+   (or plug it in).
+2. Open SideStep and click the **refresh** button next to the app on that device.
+
+SideStep re-signs the app with a fresh 7-day signature and reinstalls it over Wi-Fi —
+no cable needed, as long as the device is unlocked and reachable. Nothing has to be
+deleted or set up again: Developer Mode and the trust from the first install still
+apply, and SideStep signs you back in on its own if your login has lapsed.
+
+If several apps on that device expired, you only have to do this once — tapping
+refresh on one expired app **automatically refreshes the other expired apps on the
+same device too.**
+
+## If you turn Developer Mode off
+
+SideStep-installed apps only run while **Developer Mode** is on. If you turn Developer
+Mode off, those apps will stop opening until you turn it back on. To re-enable them:
+
+1. Turn **Developer Mode** back on (Settings ▸ Privacy & Security ▸ Developer Mode)
+   and let the device **restart**.
+2. On the iPad, **trust your Apple ID again** (Settings ▸ General ▸ VPN & Device
+   Management ▸ tap your Apple ID ▸ Trust).
+
+After that, your sideloaded apps open normally again.
 
 ## SideStep is not for piracy
 

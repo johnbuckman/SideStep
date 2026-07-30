@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>SideStep — install and keep iOS apps on your own device</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <style>
+    :root { color-scheme: light; }
+    body { max-width: 860px; margin: 0 auto; padding: 28px 24px 80px;
+           font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+           color: #1f2328; background: #fff; }
+    h1 { font-size: 2em; border-bottom: 1px solid #d0d7de; padding-bottom: .3em; }
+    h2 { font-size: 1.5em; border-bottom: 1px solid #d0d7de; padding-bottom: .3em; margin-top: 2em; }
+    h3 { font-size: 1.2em; margin-top: 1.5em; }
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    img { max-width: 100%; height: auto; }
+    em { color: #57606a; }
+    blockquote { margin: 1em 0; padding: .4em 1em; color: #57606a;
+                 border-left: .25em solid #d0d7de; background: #f6f8fa; border-radius: 4px; }
+    code { background: #eff1f3; padding: .2em .4em; border-radius: 6px; font-size: .9em; }
+    pre { background: #f6f8fa; padding: 16px; border-radius: 8px; overflow: auto; }
+    pre code { background: none; padding: 0; }
+    ul, ol { padding-left: 1.6em; }
+    li { margin: .3em 0; }
+    hr { border: 0; border-top: 1px solid #d0d7de; margin: 2em 0; }
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">SideStep — install and keep iOS apps on your own
+device</h1>
+</header>
+<h1 id="sidestep">SideStep</h1>
+<p>SideStep is a small <strong>macOS menu-bar app</strong> that installs
+iOS apps onto your own iPhone or iPad using your own Apple ID (a free
+one works). No jailbreak, no special hardware.</p>
+<p align="center">
+<img src="screenshots/sidestep-app-icon.jpg" width="112" alt="The SideStep app icon">
+</p>
+<p>SideStep re-signs and reinstalls your apps in the background within
+Apple’s allowed 7-day window, so they behave like a normal,
+permanently-installed app. It can do this over Wi-Fi, with no cable —
+which makes putting an app on your own iPhone about as easy as it
+already is on Android.</p>
+<p align="center">
+<img src="screenshots/magnatune-ipad.png" width="720" alt="A music app running on an iPad, installed with SideStep"><br>
+<em>A music app (Magnatune) installed on an iPad with SideStep, without
+the App Store.</em>
+</p>
+<h2 id="what-its-useful-for">What it’s useful for</h2>
+<ul>
+<li><strong>Installing apps the App Store doesn’t carry</strong> —
+open-source apps, your own apps, or apps with features Apple tends to
+reject (extensions, skins, scripting).</li>
+<li><strong>Keeping an old iPad or iPhone useful.</strong> Apps the App
+Store has dropped for older devices can still be installed and kept
+running.</li>
+<li><strong>Shipping or receiving updates without a review
+queue.</strong></li>
+<li><strong>Staying local.</strong> Your Apple ID, your Mac, your
+device. There’s no SideStep account and no server — nothing is uploaded
+to anyone.</li>
+</ul>
+<p>SideStep has a built-in catalog of legitimate, sideloadable apps you
+can search and install directly:</p>
+<p align="center">
+<img src="screenshots/search-magnatune.jpg" width="460" alt="SideStep's built-in catalog of sideloadable apps">
+</p>
+<h2 id="download">Download</h2>
+<p><strong><a
+href="https://github.com/johnbuckman/SideStep/releases">Download
+SideStep (notarized <code>.dmg</code>)</a></strong> — macOS 14 (Sonoma)
+or newer, Apple Silicon.</p>
+<p>Open the <code>.dmg</code> and drag <strong>SideStep</strong> to
+<strong>Applications</strong>. It’s signed with an Apple
+<strong>Developer ID</strong> and <strong>notarized by Apple</strong>,
+so it opens without the right-click / “Open Anyway” step. SideStep runs
+in the menu bar — a small crate icon
+<img src="screenshots/menubar-icon.jpg" height="20" alt="menu-bar crate icon">,
+with no Dock icon. Click it to open the panel below.</p>
+<p align="center">
+<img src="screenshots/sidestep-panel.jpg" width="460" alt="SideStep's menu-bar panel on macOS">
+<br> <em>The SideStep panel: your Apple accounts, the apps installed on
+each device, and options to add more.</em>
+</p>
+<h2 id="installing-an-app">Installing an app</h2>
+<ol type="1">
+<li><strong>Install SideStep</strong> on your Mac (above) and open
+it.</li>
+<li><strong>Sign in</strong> with an Apple ID. Any will do — you can
+make a free one at <a href="https://icloud.com">icloud.com</a>. SideStep
+handles the login and the texted/2-factor code.</li>
+<li><strong>Connect your iPhone or iPad</strong> to your Mac by cable
+and tap <strong>Trust</strong> if asked.</li>
+<li><strong>Turn on Developer Mode</strong> on the device (Settings ▸
+Privacy &amp; Security ▸ Developer Mode → on → it restarts once).
+SideStep walks you through this if it’s off.</li>
+<li>In SideStep, click <strong>Search AltStore</strong>, type what you
+want (try “magnatune” or “timer”), and click <strong>Install</strong> —
+or point SideStep at any <code>.ipa</code> file.</li>
+<li><strong>Trust your Apple ID as a developer, once.</strong> The first
+time you install from a given Apple ID, the device asks you to approve
+it: Settings ▸ General ▸ VPN &amp; Device Management ▸ tap your Apple ID
+▸ Trust. Every app you install from that same account afterwards is
+trusted automatically.</li>
+</ol>
+<p align="center">
+<img src="screenshots/devmode-find.png" width="215" alt="Finding Developer Mode in iOS Settings">
+  
+<img src="screenshots/devmode-on.png" width="215" alt="The Developer Mode toggle turned on">
+<br> <em>Step 4 — Settings ▸ Privacy &amp; Security ▸ Developer Mode,
+then switch it on (the device restarts once).</em>
+</p>
+<p align="center">
+<img src="screenshots/search-decent.jpg" width="460" alt="Searching SideStep's catalog and clicking Install">
+<br> <em>Step 5 — search the catalog and click Install.</em>
+</p>
+<p align="center">
+<img src="screenshots/trust-1-open.png" width="165" alt="The Developer App shown as Not Trusted">
+ 
+<img src="screenshots/trust-2-tap-trust.png" width="165" alt="Tapping Trust for your Apple ID">
+ 
+<img src="screenshots/trust-3-allow.png" width="165" alt="Confirming with Allow">
+ 
+<img src="screenshots/trust-4-done.png" width="165" alt="The Apple ID now trusted, app Verified">
+<br> <em>Step 6 (first time only) — Settings ▸ General ▸ VPN &amp;
+Device Management ▸ tap your Apple ID ▸ <strong>Trust</strong> ▸
+<strong>Allow</strong>. It then shows as Verified.</em>
+</p>
+<p>After the first install, adding more apps works over Wi-Fi: as long
+as the device is on and unlocked, you don’t need to plug it in.</p>
+<p align="center">
+<img src="screenshots/decent-timer-ipad.png" width="380" alt="A simple timer app on iPad">
+  
+<img src="screenshots/magnatune-iphone.png" width="190" alt="Magnatune on iPhone">
+<br> <em>Apps installed with SideStep — a kitchen timer on an iPad, a
+music player on an iPhone.</em>
+</p>
+<h2 id="automatic-updates">Automatic updates</h2>
+<p>Every app SideStep installs carries a small piece of code called a
+<strong>beacon</strong>. When you open the app, it tells your Mac that
+the device is present and unlocked. If a newer version of the app
+exists, your Mac signs it and sends it to the device over Wi-Fi in the
+background; the app applies the update the next time you close and
+reopen it. No cable, no prompts, no App Store.</p>
+<p>This is what keeps a sideloaded app from expiring: instead of dying
+after a week and needing a manual reinstall, it stays signed and current
+on its own.</p>
+<h3 id="checking-on-an-app-the-two-finger-gesture">Checking on an app:
+the two-finger gesture</h3>
+<p>Every app SideStep installs has a hidden status panel. To open it,
+<strong>press and hold two fingers in any two corners of the screen at
+the same time</strong> (for example, top-left and top-right) <strong>for
+about 1.5 seconds.</strong> It’s an awkward gesture on purpose, so you
+won’t trigger it by accident.</p>
+<p>The panel shows which Apple ID signed the app, when it was last
+refreshed, when the signature expires, and an <strong>Update app
+now</strong> button.</p>
+<p align="center">
+<img src="screenshots/updater-panel.png" width="640" alt="The two-finger status panel inside a sideloaded app">
+<br> <em>The status panel — hold two fingers in two corners for about
+1.5 seconds to open it.</em>
+</p>
+<h2 id="why-i-built-it">Why I built it</h2>
+<p>I make espresso machines, and our software is written in Tcl/Tk — a
+language the App Store won’t accept. To get our app onto customers’
+iPads I needed a way to sideload it and keep it updated without asking
+every customer to plug into a Mac each week. SideStep is the result. It
+works just as well for any app you want on your own device without going
+through the Store.</p>
+<p align="center">
+<img src="screenshots/de1app-ipad.png" width="720" alt="The Decent espresso-machine app running on an iPad">
+<br> <em>The de1app, our espresso-machine control app, on an iPad —
+coming soon via SideStep.</em>
+</p>
+<p>To make that work I ported Tcl/Tk to iOS. Below is that environment
+(iWish) running on an iPad and talking to Bluetooth hardware.</p>
+<p align="center">
+<img src="screenshots/iwish-ipad.png" width="720" alt="iWish (Tcl/Tk) on iPad talking to Bluetooth devices">
+</p>
+<h2 id="how-it-works">How it works</h2>
+<ul>
+<li><strong>It uses Apple’s own signing.</strong> Apple lets anyone
+register as a free developer with their existing Apple ID. SideStep logs
+in, obtains a normal development certificate and provisioning profile
+(the same ones Xcode uses), and signs the app with them. It does not
+jailbreak, patch iOS, disable any security, or remove any DRM — the
+device runs the app because Apple’s own signature permits it.</li>
+<li><strong>It installs over the standard protocol</strong> Apple’s own
+tools use (<code>lockdown</code> / <code>usbmux</code>), via the
+open-source <a
+href="https://github.com/libimobiledevice/libimobiledevice">libimobiledevice</a>.</li>
+<li><strong>It re-signs before expiry</strong> — on a timer, when you
+plug a device in, and (near expiry) every few minutes until the device
+is reachable over USB or Wi-Fi. It launches at login, so this happens
+without attention.</li>
+<li><strong>There’s nothing central to shut off.</strong> No server, no
+shared certificate — each app is signed by your Apple ID for your
+device. The Mac app is open source and Apple-notarized.</li>
+</ul>
+<h2 id="if-your-app-does-expire">If your app does expire</h2>
+<p>Apple’s free signatures last 7 days, and SideStep normally re-signs
+your apps well before then, in the background. But if a device is
+switched off or off the network for longer than that — for example an
+iPad that runs out of battery and sits unused for a couple of weeks —
+its apps’ signatures can lapse, and those apps won’t open until they’re
+re-signed.</p>
+<p>Getting them back is quick:</p>
+<ol type="1">
+<li>Turn the iPad on, <strong>unlock it</strong>, and make sure it’s on
+the same Wi-Fi as your Mac (or plug it in).</li>
+<li>Open SideStep and click the <strong>refresh</strong> button next to
+the app on that device.</li>
+</ol>
+<p>SideStep re-signs the app with a fresh 7-day signature and reinstalls
+it over Wi-Fi — no cable needed, as long as the device is unlocked and
+reachable. Nothing has to be deleted or set up again: Developer Mode and
+the trust from the first install still apply, and SideStep signs you
+back in on its own if your login has lapsed.</p>
+<p>If several apps on that device expired, you only have to do this once
+— tapping refresh on one expired app <strong>automatically refreshes the
+other expired apps on the same device too.</strong></p>
+<h2 id="if-you-turn-developer-mode-off">If you turn Developer Mode
+off</h2>
+<p>SideStep-installed apps only run while <strong>Developer
+Mode</strong> is on. If you turn Developer Mode off, those apps will
+stop opening until you turn it back on. To re-enable them:</p>
+<ol type="1">
+<li>Turn <strong>Developer Mode</strong> back on (Settings ▸ Privacy
+&amp; Security ▸ Developer Mode) and let the device
+<strong>restart</strong>.</li>
+<li>On the iPad, <strong>trust your Apple ID again</strong> (Settings ▸
+General ▸ VPN &amp; Device Management ▸ tap your Apple ID ▸ Trust).</li>
+</ol>
+<p>After that, your sideloaded apps open normally again.</p>
+<h2 id="sidestep-is-not-for-piracy">SideStep is not for piracy</h2>
+<p>SideStep exists for one reason: to install <strong>legitimate
+open-source and self-published apps</strong> — the kind Apple’s Store
+won’t carry, like our own espresso-machine software. It is not a way to
+install cracked copies of paid App Store apps, and it actively works to
+stay that way:</p>
+<ul>
+<li><strong>The catalog is curated.</strong> SideStep’s built-in sources
+list only legitimate apps — open-source projects, emulators, and
+official app repositories. Sources are added by public pull request and
+reviewed first; no cracked or “tweaked” App Store apps are
+accepted.</li>
+<li><strong>It refuses known pirate sources.</strong> SideStep carries a
+blocklist of sources known to hand out cracked apps and won’t add them —
+whether from the catalog or from a URL you paste in.</li>
+<li><strong>It fingerprints apps before installing.</strong> If an app
+matches a known pirated build, SideStep refuses it.</li>
+<li><strong>It asks before installing a paid App Store app.</strong> If
+what you’re installing looks like a paid App Store title, SideStep stops
+and asks you to confirm you have the right to it. A legitimate owner can
+continue; casual piracy is refused rather than waved through.</li>
+</ul>
+<p>The blocklist is public and updated from the repository, so it can
+grow as new pirate sources turn up. The point is to keep SideStep useful
+for the independent and open-source apps it was built for — and not much
+use for anything else.</p>
+<h2 id="build">Build</h2>
+<pre><code>swift build --product InstallerApp   # the menu-bar app
+swift build --product Provision       # the command-line tool (install / refresh)</code></pre>
+<p><code>./bundle-app.sh</code> builds and bundles the menu-bar app into
+<code>SideStep.app</code>. The device tools (a small <a
+href="https://github.com/libimobiledevice/libimobiledevice">libimobiledevice</a>
+helper in <a
+href="https://github.com/johnbuckman/SideStep/tree/main/Helpers"><code>Helpers/idevice</code></a>)
+ship inside the app, so it’s self-contained — no Python or external
+tools required at runtime.</p>
+<p>Contributing, or an AI agent picking up the project? Start with <a
+href="https://github.com/johnbuckman/SideStep/blob/main/docs/AI-BOOTSTRAP.md"><code>docs/AI-BOOTSTRAP.md</code></a>,
+then <a
+href="https://github.com/johnbuckman/SideStep/blob/main/docs/CURRENT-STATE.md"><code>docs/CURRENT-STATE.md</code></a>.</p>
+<h2 id="credits-license">Credits &amp; license</h2>
+<p>Built on <strong><a
+href="https://github.com/SideStore/AltSign">AltSign</a></strong> from
+the <strong><a
+href="https://github.com/altstoreio/AltStore">AltStore</a></strong> /
+<strong><a
+href="https://github.com/SideStore/SideStore">SideStore</a></strong>
+projects (© Riley Testut and contributors), licensed
+<strong>AGPL-3.0</strong>. As a derivative work, SideStep is likewise
+licensed under the <strong>GNU Affero General Public License
+v3.0</strong> — see <a
+href="https://github.com/johnbuckman/SideStep/blob/main/LICENSE"><code>LICENSE</code></a>.
+The signer is <strong><a
+href="https://github.com/zhlynn/zsign">zsign</a></strong> by zhlynn,
+included under the <strong>MIT License</strong> (see <a
+href="https://github.com/johnbuckman/SideStep/tree/main/Dependencies/zsign"><code>Dependencies/zsign</code></a>).</p>
+</body>
+</html>
