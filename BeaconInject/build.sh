@@ -10,7 +10,7 @@ OUT="$HERE/../Helpers/BeaconInject.dylib"
 mkdir -p "$(dirname "$OUT")"
 xcrun clang -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 -fobjc-arc -O \
   -framework Foundation -framework UIKit -framework CoreGraphics \
-  -framework UserNotifications -framework BackgroundTasks \
+  -framework UserNotifications -framework BackgroundTasks -framework Network \
   -dynamiclib -o "$OUT" "$HERE/beacon_inject.m" \
   -Wl,-install_name,@executable_path/BeaconInject.dylib 2>&1 | grep -viE 'using sysroot' || true
 codesign -f -s - "$OUT" 2>/dev/null || true

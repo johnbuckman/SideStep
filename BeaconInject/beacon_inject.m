@@ -20,6 +20,7 @@
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import <UserNotifications/UserNotifications.h>
 #import <BackgroundTasks/BackgroundTasks.h>
+#import <Network/Network.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -28,6 +29,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 
 #define BG_TASK_ID @"com.sidestep.beacon.refresh"
 #define NOTIF_ID   @"com.sidestep.beacon.expiry"
@@ -46,6 +48,8 @@ static BOOL      g_autoUpdates = NO;        // YES = SideStep pushes new version
 static NSDate   *g_lastBeaconAt = nil;
 static int       g_beaconCount = 0;
 static NSString *g_lastReason = @"(none yet)";
+static BOOL      g_localNetStarted = NO;    // gate: local-network access (and its prompt) has begun
+static BOOL      g_lnNagShown = NO;         // Local Network refusal card already shown once
 
 static void loadConfig(void) {
     NSString *p = [NSBundle.mainBundle pathForResource:@"BeaconConfig" ofType:@"plist"];
@@ -392,7 +396,9 @@ static NSString *fmtEta(int s) {
     UIWindow *w = [self keyWindow]; if (!w) return;
     self.exiting = NO;
     CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
-    CGFloat cardW = MIN(480, W - 64), cardH = 260;
+    // ~50% wider than the old 480pt, but never wider than the screen allows, so
+    // the status text stops wrapping unless the device genuinely can't fit it.
+    CGFloat cardW = MIN(720, W - 64), cardH = 260;
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, (H - cardH)/2, cardW, cardH)];
     card.backgroundColor = UIColor.whiteColor; card.layer.cornerRadius = 20;
     card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.3; card.layer.shadowRadius = 28;
@@ -445,22 +451,174 @@ static NSString *fmtEta(int s) {
 - (void)close { [self.overlay removeFromSuperview]; }
 @end
 
+// ---------- deferred permission flow ----------
+// The notification + Local Network prompts used to fire during launch, which
+// froze the launch screen. Now: wait 5s, ask for notifications, and only once
+// THAT is resolved trigger Local Network (Bonjour + the first beacon). If either
+// is refused, a card explains SideStep can't keep the app updated without it,
+// offering a default "Try Again" (opens Settings) and an "I understand".
+
+static UIWindow *beaconKeyWindow(void) {
+    for (UIScene *sc in UIApplication.sharedApplication.connectedScenes)
+        if ([sc isKindOfClass:UIWindowScene.class])
+            for (UIWindow *win in ((UIWindowScene *)sc).windows) if (win.isKeyWindow) return win;
+    return nil;
+}
+
+static void openAppSettings(void) {
+    NSURL *u = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+    if (u) [UIApplication.sharedApplication openURL:u options:@{} completionHandler:nil];
+}
+
+static UIButton *nagButton(NSString *title, BOOL primary, void (^handler)(void)) {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+    [b setTitle:title forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    b.backgroundColor = primary ? UIColor.systemBlueColor : [UIColor colorWithWhite:0.92 alpha:1];
+    [b setTitleColor:primary ? UIColor.whiteColor : [UIColor colorWithWhite:0.2 alpha:1] forState:UIControlStateNormal];
+    b.layer.cornerRadius = 12;
+    [b addAction:[UIAction actionWithHandler:^(__kindof UIAction *a) { if (handler) handler(); }]
+        forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+
+// A modal card: <permName> was refused → SideStep can't work properly. Default
+// "Try Again" (primary) + "I understand". Both dismiss; the caller supplies what
+// each does.
+static void showPermissionNag(NSString *permName, NSString *detail,
+                              void (^tryAgain)(void), void (^skip)(void)) {
+    UIWindow *w = beaconKeyWindow(); if (!w) return;
+    for (UIView *sub in w.subviews) if (sub.tag == 0x5EED0001) return;   // only one at a time
+
+    CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
+    UIView *dim = [[UIView alloc] initWithFrame:w.bounds];
+    dim.tag = 0x5EED0001;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+    CGFloat pad = 24, cardW = MIN(460, W - 48), contentW = cardW - pad * 2;
+    UIFont *bodyFont = [UIFont systemFontOfSize:15];
+    CGRect br = [detail boundingRectWithSize:CGSizeMake(contentW, 1000)
+                    options:NSStringDrawingUsesLineFragmentOrigin
+                    attributes:@{NSFontAttributeName: bodyFont} context:nil];
+    CGFloat bodyH = ceil(br.size.height), btnH = 48;
+    CGFloat cardH = pad + 28 + 12 + bodyH + 22 + btnH + pad;
+
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, (H - cardH)/2, cardW, cardH)];
+    card.backgroundColor = UIColor.whiteColor; card.layer.cornerRadius = 20;
+    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.3; card.layer.shadowRadius = 28;
+    card.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin |
+                            UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, pad, contentW, 28)];
+    title.text = [NSString stringWithFormat:@"Allow %@ access", permName];
+    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+    title.textColor = [UIColor colorWithWhite:0.1 alpha:1];
+    [card addSubview:title];
+
+    UILabel *body = [[UILabel alloc] initWithFrame:CGRectMake(pad, pad + 28 + 12, contentW, bodyH)];
+    body.text = detail; body.font = bodyFont; body.numberOfLines = 0;
+    body.textColor = [UIColor colorWithWhite:0.3 alpha:1];
+    [card addSubview:body];
+
+    CGFloat gap = 12, btnW = (contentW - gap)/2, btnY = cardH - pad - btnH;
+    UIButton *again = nagButton(@"Try Again", YES, ^{ [dim removeFromSuperview]; if (tryAgain) tryAgain(); });
+    again.frame = CGRectMake(pad, btnY, btnW, btnH); [card addSubview:again];
+    UIButton *ok = nagButton(@"I understand", NO, ^{ [dim removeFromSuperview]; if (skip) skip(); });
+    ok.frame = CGRectMake(pad + btnW + gap, btnY, btnW, btnH); [card addSubview:ok];
+
+    [dim addSubview:card]; [w addSubview:dim];
+}
+
+// A tiny NWBrowser used ONLY to learn whether Local Network access was DENIED
+// (a policy refusal, distinct from Wi-Fi merely being off) so we can nag.
+// Discovery itself still runs through BeaconBonjour.
+static nw_browser_t g_lnProbe = nil;
+static void startLocalNetworkProbe(void) {
+    if (@available(iOS 14.0, *)) {
+        nw_browse_descriptor_t desc = nw_browse_descriptor_create_bonjour_service("_sidestep._udp", NULL);
+        nw_parameters_t params = nw_parameters_create();
+        g_lnProbe = nw_browser_create(desc, params);
+        nw_browser_set_queue(g_lnProbe, dispatch_get_main_queue());
+        nw_browser_set_state_changed_handler(g_lnProbe, ^(nw_browser_state_t state, nw_error_t error) {
+            if (state == nw_browser_state_ready) return;              // access allowed
+            if (state == nw_browser_state_waiting && error) {
+                nw_error_domain_t dom = nw_error_get_error_domain(error);
+                int code = nw_error_get_error_code(error);
+                // Only a policy denial should nag; ENETDOWN etc. (Wi-Fi off) must not.
+                BOOL denied = (dom == nw_error_domain_dns && code == -65570 /* kDNSServiceErr_PolicyDenied */)
+                           || (dom == nw_error_domain_posix && code == EPERM);
+                if (denied && !g_lnNagShown) {
+                    g_lnNagShown = YES;
+                    showPermissionNag(@"Local Network",
+                        @"SideStep keeps this app up to date by contacting your Mac over Wi-Fi. "
+                        @"Without Local Network access it can’t receive new versions.",
+                        ^{ openAppSettings(); }, ^{ });
+                }
+            }
+        });
+        nw_browser_start(g_lnProbe);
+    }
+}
+
+// The SECOND prompt: begin all local-network activity (Bonjour discovery, the
+// refusal probe, and the first beacon). Guarded so it runs exactly once.
+static void startLocalNetwork(void) {
+    if (g_localNetStarted) return;
+    g_localNetStarted = YES;
+    g_bonjour = [BeaconBonjour new]; [g_bonjour start];   // discovery (triggers the Local Network prompt)
+    startLocalNetworkProbe();                             // detect a Local Network refusal → nag
+    maybeUpdate("launch");                                // first beacon
+}
+
+// The FIRST prompt: notifications. Only once that's resolved do we trigger Local
+// Network — "delay the 2nd one until you get the 1st". A refusal shows the nag
+// but still proceeds to Local Network (notifications aren't required to update).
+static void requestNotificationsThenLocalNet(void) {
+    UNUserNotificationCenter *c = UNUserNotificationCenter.currentNotificationCenter;
+    NSString *detail = @"SideStep sends a reminder to reopen this app before its 7-day signing "
+                       @"expires. Without notifications, it can quietly stop working.";
+    [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *s) {
+        UNAuthorizationStatus st = s.authorizationStatus;
+        if (st == UNAuthorizationStatusNotDetermined) {
+            [c requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+                completionHandler:^(BOOL granted, NSError *e) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (granted) startLocalNetwork();
+                        else showPermissionNag(@"Notifications", detail,
+                                 ^{ openAppSettings(); startLocalNetwork(); },
+                                 ^{ startLocalNetwork(); });
+                    });
+                }];
+        } else if (st == UNAuthorizationStatusDenied) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showPermissionNag(@"Notifications", detail,
+                    ^{ openAppSettings(); startLocalNetwork(); },
+                    ^{ startLocalNetwork(); });
+            });
+        } else {   // authorized / provisional / ephemeral
+            dispatch_async(dispatch_get_main_queue(), ^{ startLocalNetwork(); });
+        }
+    }];
+}
+
 // ---------- wire-up ----------
 static void onLaunch(void) {
     if (@available(iOS 13.0, *)) {
         [BGTaskScheduler.sharedScheduler registerForTaskWithIdentifier:BG_TASK_ID usingQueue:nil
             launchHandler:^(BGTask *task) { maybeUpdate("bg"); scheduleBGRefresh(); [task setTaskCompletedWithSuccess:YES]; }];
     }
-    [UNUserNotificationCenter.currentNotificationCenter
-        requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
-        completionHandler:^(BOOL granted, NSError *e) {}];
-    g_bonjour = [BeaconBonjour new]; [g_bonjour start];
     scheduleBGRefresh();
-    maybeUpdate("launch");
+    // Attach the diagnostic gesture soon, but do NOT ask for permissions or touch
+    // the network yet — those prompts froze the launch screen. Defer the whole
+    // permission flow 5s so the app's first screen renders first.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ [BeaconVitals.shared attach]; });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ requestNotificationsThenLocalNet(); });
     [NSTimer scheduledTimerWithTimeInterval:g_fgSec repeats:YES block:^(NSTimer *t) {
-        if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive) maybeUpdate("foreground-timer");
+        if (g_localNetStarted && UIApplication.sharedApplication.applicationState == UIApplicationStateActive)
+            maybeUpdate("foreground-timer");
     }];
 }
 
@@ -470,5 +628,8 @@ static void beacon_init(void) {
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidFinishLaunchingNotification
         object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { onLaunch(); }];
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
-        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { maybeUpdate("became-active"); [BeaconVitals.shared attach]; }];
+        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            if (g_localNetStarted) maybeUpdate("became-active");   // don't beacon before the perm flow runs
+            [BeaconVitals.shared attach];
+        }];
 }
