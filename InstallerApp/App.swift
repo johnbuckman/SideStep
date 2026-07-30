@@ -769,13 +769,34 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     }
 
     func refreshApp(_ t: TrackedApp) {
-        installing = true; status = "Refreshing \(t.name) on \(t.deviceName.isEmpty ? "device" : t.deviceName)…"
+        // Refresh the tapped app — and, since we're already reaching this device,
+        // sweep up any OTHER apps on it whose signature has ALREADY expired, so a
+        // single tap recovers a device that sat dead past the 7-day window.
+        let devName = t.deviceName.isEmpty ? "device" : t.deviceName
+        let expiredSiblings = Tracked.all().filter {
+            $0.udid == t.udid && $0.id != t.id && ($0.secondsUntilExpiry ?? 1) <= 0
+        }
+        let queue = [t] + expiredSiblings
+        installing = true
+        status = queue.count > 1 ? "Refreshing \(queue.count) apps on \(devName)…"
+                                 : "Refreshing \(t.name) on \(devName)…"
         Task.detached { [weak self] in
             guard let self else { return }
             let log: @Sendable (String) -> Void = { m in print("[SideStep] \(m)"); Task { @MainActor in self.status = String(m.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
-            do { let r = try await Sideloader.refreshOne(t, log: log); await MainActor.run { self.status = r } }
-            catch { await MainActor.run { self.status = "Refresh failed: \(error.localizedDescription)" } }
-            await MainActor.run { self.tracked = Tracked.all(); self.installing = false }
+            var ok = 0, fail = 0, last = ""
+            for app in queue {
+                do { last = try await Sideloader.refreshOne(app, log: log); ok += 1 }
+                catch { fail += 1; print("[SideStep] refresh failed for \(app.name): \(error)") }
+            }
+            await MainActor.run {
+                if queue.count > 1 {
+                    self.status = fail == 0 ? "Refreshed \(ok) apps on \(devName)."
+                                            : "Refreshed \(ok) of \(queue.count) on \(devName) — \(fail) failed."
+                } else {
+                    self.status = fail == 0 ? last : "Refresh failed: \(t.name)."
+                }
+                self.tracked = Tracked.all(); self.installing = false
+            }
         }
     }
 

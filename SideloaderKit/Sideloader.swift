@@ -816,10 +816,31 @@ public struct Sideloader {
         return (team.type.rawValue, team.name)
     }
 
+    /// A WORKING session for this Apple ID: the saved one if it still validates,
+    /// otherwise a silent re-login with the Keychain-stored password (so the user
+    /// doesn't have to retype anything). Returns nil only if there's no saved
+    /// account, or if the re-login needs a 2-factor code we can't supply unattended.
+    static func ensureSession(_ appleID: String, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
+        guard let pair = AccountStore.session(for: appleID) else { return nil }
+        let teams: [ALTTeam]? = try? await cont { ALTAppleAPI.sharedAPI.fetchTeams(for: pair.0, session: pair.1, completionHandler: $0) }
+        if teams != nil { return pair }   // saved session still good
+        log("session for \(appleID) expired — signing in again…")
+        guard let pw = Keychain.password(for: appleID), let anisette = Anisette.fresh() else { return nil }
+        let res: (ALTAccount, ALTAppleAPISession)? = try? await withCheckedThrowingContinuation { c in
+            ALTAppleAPI.sharedAPI.authenticate(appleID: appleID, password: pw, anisetteData: anisette,
+                verificationHandler: { submit in submit(nil) },   // unattended: can't satisfy a 2FA prompt
+                completionHandler: { a, s, e in if let a, let s { c.resume(returning: (a, s)) } else { c.resume(throwing: e ?? SideErr.fail("reauth")) } })
+        }
+        if let r = res { AccountStore.add(account: r.0, session: r.1) }
+        return res
+    }
+
     /// Re-sign + (WiFi/USB) re-install one tracked app on its device.
     @discardableResult
     public static func refreshOne(_ t: TrackedApp, log: @escaping (String) -> Void) async throws -> String {
-        guard let (account, session) = AccountStore.session(for: t.appleID) else { throw SideErr.fail("account \(t.appleID) not signed in") }
+        guard let (account, session) = await ensureSession(t.appleID, log: log) else {
+            throw SideErr.fail("Couldn't sign in to \(t.appleID) automatically. Open SideStep and sign in again — you may just need to enter a texted code.")
+        }
         // GitHub-sourced apps always push the CURRENT latest release (keeps the device
         // on the newest build), updating the remembered tag.
         if !t.githubRepo.isEmpty, let rel = await GitHub.latestIPA(repo: t.githubRepo) {
