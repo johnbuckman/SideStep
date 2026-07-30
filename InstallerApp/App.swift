@@ -459,11 +459,25 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         Task.detached { [weak self] in
             guard let self else { return }
             let log: @Sendable (String) -> Void = { msg in print("[SideStep] \(msg)"); Task { @MainActor in self.status = String(msg.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
+            // Shown only when an app to be installed looks like a known PAID App Store
+            // app — a legitimate owner can proceed; the default (Cancel) refuses.
+            let confirm: @Sendable (String, String) async -> Bool = { app, bid in
+                await MainActor.run {
+                    let a = NSAlert()
+                    a.messageText = "Is this a legitimate copy of \(app)?"
+                    a.informativeText = "This looks like \(app) (\(bid)) — a paid App Store app. SideStep won't help distribute pirated apps.\n\nContinue only if you own this app or otherwise have the right to install this build."
+                    a.alertStyle = .warning
+                    a.addButton(withTitle: "Cancel")            // default
+                    a.addButton(withTitle: "I have the rights")
+                    NSApp.activate(ignoringOtherApps: true)
+                    return a.runModal() == .alertSecondButtonReturn
+                }
+            }
             do {
                 let result: String
                 switch kind {
-                case .ipa(let path): result = try await Sideloader.installFromIPA(account: account, session: session, filePath: path, iPadUDID: udid, github: gh, log: log)
-                case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, log: log)
+                case .ipa(let path): result = try await Sideloader.installFromIPA(account: account, session: session, filePath: path, iPadUDID: udid, github: gh, confirm: confirm, log: log)
+                case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, confirm: confirm, log: log)
                 }
                 dlog("execute: install SUCCEEDED — \(result)")
                 await MainActor.run { self.status = result; self.maybeShowTrustHint(appleID: account.appleID) }
@@ -607,7 +621,18 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     }
     func installAltStoreApp(_ app: SourceApp) { closeAltStoreSearch(); startInstall(.source(app)) }
     func reloadAltStoreSources() { Task { @MainActor in self.altStoreSources = await AltStoreCatalog.effectiveSources() } }
-    func addAltStoreSource(_ url: String) { AltStoreCatalog.addUserSource(url); reloadAltStoreSources(); loadAltStore(force: true) }
+    func addAltStoreSource(_ url: String) {
+        if let note = Blocklist.shared.blockedSource(url) {
+            let a = NSAlert()
+            a.messageText = "SideStep won't add this source"
+            a.informativeText = "That source is on SideStep's block list because it distributes pirated or cracked apps.\n\n\(note)"
+            a.alertStyle = .warning; a.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true); a.runModal()
+            status = "Blocked a known pirate source."
+            return
+        }
+        AltStoreCatalog.addUserSource(url); reloadAltStoreSources(); loadAltStore(force: true)
+    }
     func removeAltStoreSource(_ url: String) { AltStoreCatalog.removeSource(url); reloadAltStoreSources(); loadAltStore(force: true) }
 
     /// Manually check every GitHub-tracked app for a newer release now.
@@ -1011,8 +1036,6 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("SideStep").font(.title2).bold()
-            Text("Create free Apple accounts at [icloud.com](https://www.icloud.com/) — each free account can install **3 apps**. A $99/year Apple Developer subscription removes the limit.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             // Accounts + their installed apps
             DisclosureGroup("Your Apple accounts", isExpanded: $accountsExpanded) {
@@ -1100,6 +1123,8 @@ struct ContentView: View {
                         if m.loginStage == .working { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
                         Text(m.loginStatus).font(.caption).foregroundStyle(.red)
                     }
+                    Text("Create free Apple accounts at [icloud.com](https://www.icloud.com/) — each free account can install **3 apps**. A $99/year Apple Developer subscription removes the limit.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(.leading, 4)
             } else {
                 Button { m.addingAccount = true } label: { Label("Add account", systemImage: "plus.circle") }.buttonStyle(.borderless)
@@ -1338,6 +1363,7 @@ struct InstallerApp: App {
             BeaconListener.shared.start(log: { print("[SideStep beacon] \($0)") })
             dlog("post-launch: BeaconListener started")
             UpdateChecker.shared.checkIfDue()   // daily GitHub-Releases self-update check
+            Task { await Blocklist.refresh() }  // pull the latest anti-piracy blocklist from the repo
         }
         dlog("App.init: populating teams…")
         Sideloader.populateTeamsInBackground()   // so the team picker is ready + refresh honors the choice

@@ -58,7 +58,8 @@ public enum AltStoreCatalog {
     /// All installable apps across the effective sources, merged + deduped by bundle id.
     public static func allApps(force: Bool = false) async -> [SourceApp] {
         if !force, let c = cache, Date().timeIntervalSince(c.at) < 600 { return c.apps }
-        let urls = (await effectiveSources()).map { $0.url }
+        // Never surface apps from a blocklisted (pirate) source, even if one slipped in.
+        let urls = (await effectiveSources()).map { $0.url }.filter { Blocklist.shared.blockedSource($0) == nil }
         var merged: [String: SourceApp] = [:]
         await withTaskGroup(of: [SourceApp].self) { group in
             for u in urls { group.addTask { await fetchOne(u) } }

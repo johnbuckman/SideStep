@@ -538,12 +538,13 @@ public struct Sideloader {
     @discardableResult
     public static func installSourceApp(account: ALTAccount, session: ALTAppleAPISession,
                                         app: SourceApp, iPadUDID: String,
+                                        confirm: @escaping (_ app: String, _ bundleID: String) async -> Bool = { _, _ in true },
                                         log: @escaping (String) -> Void) async throws -> String {
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-dl-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let appPath = try await downloadAndUnzipApp(app.downloadURL, into: work, log: log)
         return try await install(account: account, session: session, appPath: appPath.path,
-                                 source: app.downloadURL, iPadUDID: iPadUDID, log: log)
+                                 source: app.downloadURL, iPadUDID: iPadUDID, confirm: confirm, log: log)
     }
 
     /// Download an IPA and unzip it, returning the path to the .app inside Payload/.
@@ -628,7 +629,18 @@ public struct Sideloader {
     public static func install(account: ALTAccount, session: ALTAppleAPISession,
                                appPath: String, source: String, iPadUDID: String,
                                github: (repo: String, tag: String)? = nil,
+                               confirm: @escaping (_ app: String, _ bundleID: String) async -> Bool = { _, _ in true },
                                log: @escaping (String) -> Void) async throws -> String {
+        // Anti-piracy screening (before any Apple API work, and before we rewrite the
+        // bundle id): refuse known pirate sources/files outright; confirm a known paid app.
+        switch Blocklist.shared.screen(appPath: appPath, origin: source) {
+        case .allow: break
+        case .block(let why):
+            throw SideErr.fail("🚫 \(why) SideStep won't sideload pirated apps.")
+        case .warnPaid(let app, let bid):
+            if await confirm(app, bid) { log("\(app): user confirmed they have the rights — continuing") }
+            else { throw SideErr.fail("Install cancelled — \(app) looks like a paid App Store app.") }
+        }
         let api = ALTAppleAPI.sharedAPI
 
         let teams: [ALTTeam] = try await cont { api.fetchTeams(for: account, session: session, completionHandler: $0) }
@@ -767,9 +779,10 @@ public struct Sideloader {
     public static func installFromIPA(account: ALTAccount, session: ALTAppleAPISession,
                                       filePath: String, iPadUDID: String,
                                       github: (repo: String, tag: String)? = nil,
+                                      confirm: @escaping (_ app: String, _ bundleID: String) async -> Bool = { _, _ in true },
                                       log: @escaping (String) -> Void) async throws -> String {
         if filePath.hasSuffix(".app") {
-            return try await install(account: account, session: session, appPath: filePath, source: filePath, iPadUDID: iPadUDID, github: github, log: log)
+            return try await install(account: account, session: session, appPath: filePath, source: filePath, iPadUDID: iPadUDID, github: github, confirm: confirm, log: log)
         }
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-ipa-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -779,7 +792,7 @@ public struct Sideloader {
         guard let appName = apps.first(where: { $0.hasSuffix(".app") }) else { throw SideErr.fail("no .app inside the IPA") }
         return try await install(account: account, session: session,
                                  appPath: payload.appendingPathComponent(appName).path,
-                                 source: filePath, iPadUDID: iPadUDID, github: github, log: log)
+                                 source: filePath, iPadUDID: iPadUDID, github: github, confirm: confirm, log: log)
     }
 
     /// Install the newest `.ipa` from a GitHub repo's releases, remembering the repo

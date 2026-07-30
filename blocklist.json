@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "updated": "2026-07-30",
+  "_comment": "SideStep's anti-piracy blocklist. SideStep REFUSES to add these sources or install these exact known files, and ASKS FOR CONFIRMATION before sideloading a known PAID App Store app (so a legitimate owner can still proceed). Hand-curated — send a PR to add entries. MATCHING: 'sources' match by host (a host dedicated to piracy) or host + pathContains (a pirate manifest living on a host that ALSO serves legit apps — we block only that path). 'paidBundleIds' are REAL App Store bundle IDs of PAID apps, where a sideloaded copy is almost always piracy, so we warn (not hard-block, so owners can proceed). Free-app tweaks (YouTube++/Instagram++/etc.) are deliberately NOT listed here — their bundle IDs belong to free apps, so matching them would false-positive on legit installs; those are caught at the source level instead. 'ipaSha256'/'binarySha256' are exact known cracked files (zero false positives) — binarySha256 is the SHA-256 of the app's main Mach-O executable (survives re-zipping).",
+  "sources": [
+    { "host": "ipa.cypwn.xyz", "note": "CyPwn IPA Library — cracked/tweaked App Store apps (Spotify crack, cracked paid games)" },
+    { "host": "wuxu1.github.io", "pathContains": "wuxu-complete-plus", "note": "WuXu's Library++ — ++/cracked apps. (The base wuxu-complete.json is jailbreak tools/emulators and is NOT blocked.)" },
+    { "host": "quarksources.github.io", "pathContains": "quantumsource++", "note": "Quantum Source++ — tweaked/cracked apps. (The base Quantum Source is legit and is NOT blocked.)" }
+  ],
+  "paidBundleIds": [
+    { "id": "com.spotify.client", "app": "Spotify" },
+    { "id": "com.luma-touch.LumaFusion", "app": "LumaFusion" },
+    { "id": "com.imageline.FLStudioMobileHD", "app": "FL Studio Mobile" },
+    { "id": "com.playdigious.littlenightmares", "app": "Little Nightmares" },
+    { "id": "com.stratospherix.filebrowserbiz", "app": "FileBrowser" },
+    { "id": "com.and.games505.Terraria", "app": "Terraria" },
+    { "id": "com.savage.procreate", "app": "Procreate" },
+    { "id": "com.mojang.minecraftpe", "app": "Minecraft" }
+  ],
+  "ipaSha256": [],
+  "binarySha256": []
+}

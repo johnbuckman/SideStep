@@ -34,6 +34,8 @@ cp -R "$BINDIR/OpenSSL.framework" "$APP/Contents/MacOS/OpenSSL.framework"
 cp -R Helpers/idevice "$APP/Contents/Helpers/idevice"
 # prebuilt iOS beacon dylib injected into every app we install
 cp Helpers/beacon_payload.dat "$APP/Contents/Resources/beacon_payload.dat"
+# anti-piracy blocklist (offline fallback; refreshed from the repo at launch)
+cp blocklist.json "$APP/Contents/Resources/blocklist.json"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
