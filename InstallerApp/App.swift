@@ -1022,6 +1022,7 @@ struct ContentView: View {
 struct AltStoreSearchView: View {
     @ObservedObject var m: AppModel
     @State private var newSource = ""
+    @FocusState private var filterFocused: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Install apps from AltStore sources").font(.headline)
@@ -1029,7 +1030,9 @@ struct AltStoreSearchView: View {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 TextField("filter apps by name…", text: $m.altStoreQuery).textFieldStyle(.roundedBorder)
+                    .focused($filterFocused)
                     .onChange(of: m.altStoreQuery) { _ in m.filterAltStore() }
+                    .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { filterFocused = true } }
                 if m.altStoreLoading { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
                 Button("Reload") { m.loadAltStore(force: true) }.disabled(m.altStoreLoading)
             }
@@ -1053,6 +1056,7 @@ struct AltStoreSearchView: View {
                             VStack(alignment: .leading, spacing: 1) {
                                 HStack(spacing: 5) {
                                     Text(app.name).font(.callout.weight(.medium))
+                                        .foregroundStyle(app.infoURL != nil ? Color.accentColor : Color.primary)
                                     if let v = app.version, !v.isEmpty { Text("v\(v)").font(.caption2).foregroundStyle(.secondary) }
                                 }
                                 if let d = app.localizedDescription, !d.isEmpty {
@@ -1060,6 +1064,10 @@ struct AltStoreSearchView: View {
                                 }
                                 Text(app.sourceName).font(.caption2).foregroundStyle(.tertiary)
                             }
+                            .contentShape(Rectangle())
+                            .onTapGesture { if let u = app.infoURL { NSWorkspace.shared.open(u) } }
+                            .onHover { h in if app.infoURL != nil { if h { NSCursor.pointingHand.push() } else { NSCursor.pop() } } }
+                            .help(app.infoURL.map { "More info: \($0.absoluteString)" } ?? "")
                             Spacer()
                             Button("Install") { m.installAltStoreApp(app) }.disabled(m.installing)
                         }

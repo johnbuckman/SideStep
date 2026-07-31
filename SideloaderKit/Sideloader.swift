@@ -243,6 +243,18 @@ public struct SourceApp: Decodable, Identifiable, Sendable {
     public var sourceName: String = ""   // which source it came from (set by the catalog)
     public var id: String { bundleIdentifier }
 
+    /// A "more info" page for this app, when we can infer one — the GitHub repo behind a
+    /// github.com / raw.githubusercontent.com download URL. nil when there's no obvious
+    /// page (e.g. a plain CDN download), so the UI only links when a URL exists.
+    public var infoURL: URL? {
+        guard let d = URL(string: downloadURL) else { return nil }
+        let host = d.host ?? ""
+        guard host == "github.com" || host == "raw.githubusercontent.com" else { return nil }
+        let parts = d.pathComponents.filter { $0 != "/" && !$0.isEmpty }
+        guard parts.count >= 2 else { return nil }
+        return URL(string: "https://github.com/\(parts[0])/\(parts[1])")
+    }
+
     enum CodingKeys: String, CodingKey { case name, bundleIdentifier, downloadURL, version, versions, localizedDescription, iconURL, developerName }
     struct Ver: Decodable { var downloadURL: String?; var version: String? }
 
