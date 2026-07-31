@@ -4,9 +4,6 @@ This guide walks you through everything: what SideStep is, what you need, exactl
 what to do on your Mac **and** on your iPhone/iPad, and — importantly — the real
 benefits and limits so you know what you're getting into before you start.
 
-> **Prefer slides?** A visual overview is in
-> [SideStep.pdf](SideStep.pdf) / [SideStep.pptx](SideStep.pptx).
-
 ---
 
 ## 1. What SideStep is (and how it works)
@@ -133,8 +130,8 @@ path.)
    panel. The panel grows and shrinks to fit its contents as you expand or collapse
    sections.
 
-> **Requirements:** macOS 14 (Sonoma) or newer, Apple Silicon. This is an early
-> **0.1 alpha** — please report anything rough.
+> **Requirements:** macOS 14 (Sonoma) or newer, Apple Silicon. This is still a
+> **beta** — please report anything rough.
 
 Optionally, in the panel's **Settings** section, enable **"Launch SideStep at
 login"** so it's always running and can keep your apps refreshed.
@@ -228,6 +225,8 @@ another Apple ID) to make room.
 - **Self-contained** — one menu-bar app; no server, no Docker, no companion app on
   the device.
 - **Automatic upkeep** — handles the 7-day refresh for you.
+- **Legitimate apps only** — SideStep refuses known pirate sources and cracked App
+  Store apps, so it stays clean; it's built for open-source and self-published apps.
 
 ---
 

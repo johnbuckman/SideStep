@@ -25,37 +25,6 @@ func withSaved(_ work: @escaping (ALTAccount, ALTAppleAPISession) async -> Void)
     sem.wait()
 }
 
-if let i = args.firstIndex(of: "--inspect"), i + 1 < args.count {
-    let info = IPAInspector.inspect(args[i + 1])
-    print("name=\(info.appName)  bundleID=\(info.bundleID)  version=\(info.version)")
-    print("signer=\(info.signer.rawValue)  otaCapable=\(info.otaCapable)")
-    exit(0)
-}
-
-if let i = args.firstIndex(of: "--ota"), i + 1 < args.count {
-    let info = IPAInspector.inspect(args[i + 1])
-    OTAHost.shared.onProgress = { stage, sent, total in
-        if stage == "downloading" { errln(">>> progress \(stage) \(sent)/\(total) (\(total > 0 ? Int(Double(sent)/Double(total)*100) : 0)%)") }
-        else { errln(">>> progress \(stage)") }
-    }
-    do {
-        let url = try OTAHost.shared.start(ipaPath: args[i + 1], info: info)
-        errln(">>> OTA host serving \(url)  (\(info.appName), \(info.signer.rawValue))")
-        RunLoop.main.run()
-    } catch { errln(">>> OTA host failed: \(error)"); exit(1) }
-}
-
-if args.contains("--getudid") {
-    OTAHost.shared.onUDID = { udid, product, version in
-        errln(">>> UDID CAPTURED: \(udid)  product=\(product) version=\(version)")
-    }
-    do {
-        let url = try OTAHost.shared.startUDIDCapture()
-        errln(">>> UDID host serving \(url)  (open on the device, install the profile)")
-        RunLoop.main.run()
-    } catch { errln(">>> UDID host failed: \(error)"); exit(1) }
-}
-
 // Check (and, if off, reveal) Developer Mode on connected devices.
 if let i = args.firstIndex(of: "--devmode") {
     let udids: [String]

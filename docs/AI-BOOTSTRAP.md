@@ -83,14 +83,13 @@ open "/Applications/AI Apps/SideStep.app"   # menu-bar crate icon (no Dock icon)
   release tag or the in-app updater never fires.
 - Logs: `~/Library/Logs/SideStep.log`; crash-safe `/tmp/sidestep.log`.
 
-## Legacy code you can ignore (from the dropped approaches)
+## History
 
-Not part of the current model — safe to ignore, and candidates for removal:
-`SideloaderKit/OTAHost.swift`, `SideloaderKit/IPAInspector.swift`, the QR/OTA +
-UDID-capture bits in `App.swift` (`startOTA`, `QRView`, `captureUDID`), the
-`Helpers/idevice_*.c` Wi-Fi-mesh experiments (`idevice_netinstall`/`ipprobe`/`setwifi`,
-`sweep.sh`), and the whole `docs/wireless/` research folder + `docs/SideStep.pdf` /
-`.pptx` slide decks.
+The earlier OTA / `itms-services` distribution, UDID-capture, ad-hoc-profile, and
+Wi-Fi-mesh experiments have been **removed** from the tree (git history still has them
+if ever needed) — along with the `docs/wireless/` research and the slide decks. If you
+find a reference to `OTAHost`, `IPAInspector`, QR install, or `idevice_netinstall`, it's
+stale.
 
 ## Safety / conventions
 

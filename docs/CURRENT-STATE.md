@@ -79,17 +79,15 @@ bump). `gh release --target` wants a branch name (`main`), not a short SHA.
 
 ## Open items / where to pick up
 
-1. **Remove the dead OTA/ad-hoc code** now that we pursue only the user-signs model:
-   `SideloaderKit/OTAHost.swift`, `IPAInspector.swift`, the QR/OTA + UDID-capture UI in
-   `App.swift`, the `Helpers/idevice_*.c` mesh experiments, and `docs/wireless/` + the
-   slide decks.
-2. **Prompt for the 2FA code during a manual refresh** when Apple demands one (today it
+1. **Prompt for the 2FA code during a manual refresh** when Apple demands one (today it
    asks the user to re-open the sign-in flow).
-3. **Seed `blocklist.json` `ipaSha256`/`binarySha256`** as specific cracked builds are
+2. **Seed `blocklist.json` `ipaSha256`/`binarySha256`** as specific cracked builds are
    identified (the mechanism runs on every install; the lists are currently empty).
-4. **Wi-Fi reliability** — direct-IP + heartbeat works when the device is unlocked +
+3. **Wi-Fi reliability** — direct-IP + heartbeat works when the device is unlocked +
    paired + on the same network; USB remains the sure path, and iOS 17+ can need a
    tunnel in some cases.
+
+(The dead OTA / ad-hoc / QR / UDID-capture / Wi-Fi-mesh code was removed on 2026-07-30.)
 
 ## Not in this repo
 
