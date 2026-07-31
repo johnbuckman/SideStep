@@ -1033,6 +1033,11 @@ struct AltStoreSearchView: View {
                     .focused($filterFocused)
                     .onChange(of: m.altStoreQuery) { _ in m.filterAltStore() }
                     .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { filterFocused = true } }
+                    // The catalog load re-renders the list and drops focus, so re-assert it
+                    // once loading finishes (and any time it flips back to idle).
+                    .onChange(of: m.altStoreLoading) { loading in
+                        if !loading { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { filterFocused = true } }
+                    }
                 if m.altStoreLoading { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
                 Button("Reload") { m.loadAltStore(force: true) }.disabled(m.altStoreLoading)
             }
