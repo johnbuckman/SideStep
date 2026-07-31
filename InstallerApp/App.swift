@@ -1081,7 +1081,7 @@ struct AltStoreSearchView: View {
                         TextField("add a source URL…", text: $newSource).textFieldStyle(.roundedBorder)
                         Button("Add") { m.addAltStoreSource(newSource); newSource = "" }.disabled(newSource.isEmpty)
                     }
-                    Text("Add legitimate AltStore-format source URLs. The default list lives in SideStep’s repo (sources.json) — send a PR to add to it.")
+                    Text("Add legitimate AltStore-format source URLs. The default list lives in SideStep’s repo ([sources.json](https://github.com/johnbuckman/SideStep/blob/main/sources.json)) — send a PR to add to it.")
                         .font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
                 }.padding(.top, 4)
             }.font(.callout)
