@@ -33,11 +33,11 @@
       ]
     },
     {
-      "name": "reaprime (Decent)",
+      "name": "Decent",
       "bundleIdentifier": "net.tadel.reaprime",
-      "developerName": "Vid Tadel",
-      "localizedDescription": "reaprime — an open-source iOS controller for the Decent Espresso machine, by Vid Tadel. Sideload it directly with your own Apple ID.",
-      "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/reaprime-icon.png",
+      "developerName": "Decent Espresso",
+      "localizedDescription": "The open-source iOS controller app for the Decent Espresso machine (formerly “reaprime”). Sideload it directly with your own Apple ID.",
+      "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decent-icon.png",
       "versions": [
         {
           "version": "0.7.15-beta.2",
