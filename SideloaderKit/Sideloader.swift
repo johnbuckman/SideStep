@@ -240,19 +240,24 @@ public struct SourceApp: Decodable, Identifiable, Sendable {
     public var localizedDescription: String?
     public var iconURL: String?
     public var developerName: String?
-    public var sourceName: String = ""   // which source it came from (set by the catalog)
+    public var sourceName: String = ""      // which source it came from (set by the catalog)
+    public var sourceWebsite: String = ""   // the source's own website (fallback "more info")
     public var id: String { bundleIdentifier }
 
-    /// A "more info" page for this app, when we can infer one — the GitHub repo behind a
-    /// github.com / raw.githubusercontent.com download URL. nil when there's no obvious
-    /// page (e.g. a plain CDN download), so the UI only links when a URL exists.
+    /// A "more info" page for this app: the GitHub project behind a github.com /
+    /// raw.githubusercontent.com download URL, else the source's own website. nil only
+    /// when neither exists, so the UI links whenever a URL is available.
     public var infoURL: URL? {
-        guard let d = URL(string: downloadURL) else { return nil }
-        let host = d.host ?? ""
-        guard host == "github.com" || host == "raw.githubusercontent.com" else { return nil }
-        let parts = d.pathComponents.filter { $0 != "/" && !$0.isEmpty }
-        guard parts.count >= 2 else { return nil }
-        return URL(string: "https://github.com/\(parts[0])/\(parts[1])")
+        // 1) the GitHub project behind a github download URL
+        if let d = URL(string: downloadURL), let host = d.host,
+           host == "github.com" || host == "raw.githubusercontent.com" {
+            let parts = d.pathComponents.filter { $0 != "/" && !$0.isEmpty }
+            if parts.count >= 2 { return URL(string: "https://github.com/\(parts[0])/\(parts[1])") }
+        }
+        // 2) fall back to the source's own website (for non-GitHub downloads)
+        if !sourceWebsite.isEmpty, let u = URL(string: sourceWebsite),
+           let s = u.scheme, s == "http" || s == "https" { return u }
+        return nil
     }
 
     enum CodingKeys: String, CodingKey { case name, bundleIdentifier, downloadURL, version, versions, localizedDescription, iconURL, developerName }
@@ -278,7 +283,7 @@ public struct SourceApp: Decodable, Identifiable, Sendable {
         self.developerName = developerName; self.sourceName = sourceName
     }
 }
-struct AltSource: Decodable { var name: String?; var apps: [SourceApp] }
+struct AltSource: Decodable { var name: String?; var website: String?; var apps: [SourceApp] }
 
 public struct TrackedApp: Codable, Identifiable {
     public var name: String

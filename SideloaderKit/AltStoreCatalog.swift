@@ -77,7 +77,8 @@ public enum AltStoreCatalog {
         guard let u = URL(string: urlString), let (d, _) = try? await URLSession.shared.data(from: u),
               let src = try? JSONDecoder().decode(AltSource.self, from: d) else { return [] }
         let sname = src.name ?? ""
-        return src.apps.map { var a = $0; a.sourceName = sname; return a }
+        let sweb = src.website ?? ""
+        return src.apps.map { var a = $0; a.sourceName = sname; a.sourceWebsite = sweb; return a }
     }
     public static func search(_ q: String, in apps: [SourceApp]) -> [SourceApp] {
         let s = q.lowercased().trimmingCharacters(in: .whitespaces)
