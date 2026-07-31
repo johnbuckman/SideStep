@@ -1,108 +1,102 @@
 # AI bootstrap — start here
 
-You're an AI picking up the **SideStep** project. This file orients you fast: what it
-is, where things live, the load-bearing facts, and how to build/test without breaking
-things. Read this, then the linked docs, then act.
+You're an AI (or a new contributor) picking up **SideStep**. This orients you fast:
+what it is, the one approach we pursue, where things live, and how to build. Read
+this, then [CURRENT-STATE.md](CURRENT-STATE.md), then act.
 
-> **➡️ Then read [CURRENT-STATE.md](CURRENT-STATE.md).** It is the living, detailed
-> state of the wireless work (QR/OTA install, install progress, Wi-Fi device
-> registration): build gotchas that will otherwise waste your time, the ad-hoc
-> signing recipe, verified findings, test recipes, and the open items to pick up.
-> Where this file and CURRENT-STATE disagree about *current* state, trust that one.
+## What SideStep is — and the ONE approach we pursue
 
-## What SideStep is
+A small, self-contained **macOS menu-bar app** that installs iOS apps onto a user's
+own iPhone/iPad and keeps them signed — using **the user's own Apple ID**.
 
-A lean, self-contained **macOS menu-bar app** that installs and keeps iOS apps signed on
-a user's devices using their own Apple ID — an alternative to AltStore/SideStore that
-signs on the Mac. It grew out of diagnosing why an app failed to install via AltStore on
-iOS 26 (root cause: AltStore/SideStore's `ldid` emits a **SHA-1-primary CodeDirectory**
-that iOS 26 rejects with `0xe8008001`; **zsign/codesign emit SHA-256-primary** which
-installs — so SideStep signs with **zsign**).
+There is exactly **one model, on purpose** (earlier versions offered several install
+paths, which people found confusing — EuroTcl 2026 feedback):
 
-- **Public repo:** `johnbuckman/SideStep` (AGPL-3.0; zsign is MIT).
-- **Local code:** `~/altstore-fork/AltSign-SS` (a fork of SideStore/AltSign).
-- **Installed app:** `/Applications/AI Apps/SideStep.app`.
-- **Shipped:** notarized `v0.2-alpha` DMG on GitHub Releases.
+> The user starts from an **unsigned `.ipa`**, signs it on their Mac with **their own
+> free (or paid) Apple ID**, and installs it to their own device. SideStep then keeps
+> it re-signed automatically.
 
-## Core flow (already built & shipping)
+Concretely: **free-Apple-ID login → Apple dev certificate + provisioning profile (the
+same ones Xcode uses) → sign the IPA with zsign on the Mac → install over USB (or
+Wi-Fi) via libimobiledevice → auto re-sign every 7 days.** No jailbreak, no shared
+certificate, no server, no companion app on the device.
 
-Free-Apple-ID login (SMS 2FA) → auto-provision (one cert **persisted & reused** per
-account) → **zsign** sign → **bundled libimobiledevice** install over USB (no Python) →
-in-app 7-day auto-refresh → multiple accounts (3 app slots each) + multi-device + per-app
-manage, all from the menu bar. Multi-team accounts get a team picker (free 7-day vs paid
-1-year). Signing is via `native_bridge_zsign_sign` (**not** macOS `codesign`).
+We do **not** pursue the alternatives that were explored earlier — OTA /
+`itms-services` distribution, paid ad-hoc 100-device profiles, on-device signing,
+VPN-loopback refreshers, QR "refresh portals." Some dead code from those paths still
+exists; see **Legacy code** below.
+
+- **Public repo:** `johnbuckman/SideStep` (AGPL-3.0; zsign is MIT). Landing page:
+  <https://johnbuckman.github.io/SideStep/>
+- **Local code:** `~/altstore-fork/AltSign-SS` (a fork of SideStore/AltSign), branch
+  `isl-main`, remote `sidestep` (push here — **not** `origin`, which is upstream AltSign).
+- **Installed app:** `/Applications/AI Apps/SideStep.app` (menu-bar, `LSUIElement`).
+- **Latest release:** notarized **v0.2.7** DMG on GitHub Releases.
+
+## The pipeline (what actually runs)
+
+1. **Login** — Apple-ID auth incl. SMS 2FA; "anisette" anti-abuse data generated
+   locally (private `AOSKit`/`AuthKit`). One certificate is **persisted & reused per
+   account** so re-signing one app doesn't invalidate the others.
+2. **Sign** — `ALTSigner` → the native **zsign** bridge (`native_bridge_zsign_sign`),
+   which emits a **SHA-256-primary CodeDirectory** (the format iOS 16–26 accept; the
+   old ldid emitted SHA-1-primary → `0xe8008001`). Signed for that one user's device.
+3. **Instrument** — a tiny **beacon** dylib is injected into the app (`LC_LOAD_DYLIB`;
+   shipped as an XOR data blob so macOS notarization never scans an iOS binary). At
+   runtime it pings the Mac so it can re-sign + push a fresh build over Wi-Fi.
+4. **Install** — over USB via the bundled **libimobiledevice** helper (`Helpers/idevice`),
+   or by **direct IP** over Wi-Fi (the device's beacon supplies its IP; a heartbeat
+   keeps the AFC connection alive).
+5. **Keep alive** — re-sign+reinstall past ~70% of the 7-day window, on a timer, on
+   device-connect, and every ~5 min near expiry. A manual refresh sweeps every expired
+   app on that device and silently re-logs-in via the Keychain password.
+6. **Refuse piracy** — `Blocklist` screens every install and add-source (`blocklist.json`).
 
 ## Repo layout (the parts you'll touch)
 
 | Path | What |
 |---|---|
-| `InstallerApp/App.swift` | The SwiftUI menu-bar app: `RefreshDaemon`, `AppModel`, `ContentView`, `InstallerApp`. |
-| `SideloaderKit/Sideloader.swift` | The pipeline: `AccountStore`, `CertStore`, `Tracked`, `install/refreshAll/refreshOne/removeApp`, `connectedDevices`, `helperPath`. |
+| `InstallerApp/App.swift` | SwiftUI menu-bar app: `AppModel`, `ContentView`, `RefreshDaemon`, install/refresh flows. |
+| `SideloaderKit/Sideloader.swift` | The pipeline: `install/refreshOne/refreshAll/removeApp`, `ensureSession`, `AccountStore`/`CertStore`/`Tracked`, `connectedDevices`, `helperPath`/`ipInstallPath`. |
+| `SideloaderKit/Blocklist.swift` + `blocklist.json` | Anti-piracy screening (bundled + refreshed from the repo). |
+| `SideloaderKit/AltStoreCatalog.swift` + `sources.json` / `sidestep-apps.json` | The "Search AltStore" app catalog. |
+| `BeaconInject/beacon_inject.m` + `build.sh` | The injected self-update beacon (built → `Helpers/beacon_payload.dat`). |
 | `Sources/` (AltSign) | Apple-ID auth, anisette, provisioning, `ALTSigner`. |
-| `Helpers/idevice/` + `Helpers/idevicehelper.c` | Bundled libimobiledevice device tools (list/install/uninstall). |
-| `Helpers/idevice_*.c`, `Helpers/sweep.sh` | **WIP** wireless-mesh tools (link a patched libimobiledevice; not yet wired into the app). |
-| `docs/GUIDE.md` | End-user guide. |
-| `docs/wireless/` | **The wireless install/refresh research — read this before any wireless work.** |
-| `~/altstore-fork/rebuild-app.sh` | Local build → bundles `/Applications/AI Apps/SideStep.app` (writes Info.plist, copies OpenSSL.framework + AppIcon + `Helpers/idevice`, ad-hoc signs). **Not in repo.** |
-| `AltSign-SS/bundle-app.sh` | Repo-relative equivalent of rebuild-app.sh. |
-| `AltSign-SS/notarize-build.sh` + `SideStep.entitlements` | Developer-ID + hardened-runtime + notarized DMG build (notary keychain profile `bping-notary`). |
-
-## The wireless work (2026-07-12) — the big recent effort
-
-Investigated installing/refreshing **over the network instead of USB**, tested end to
-end on real iOS 26 hardware over a **hostile Eero mesh**. **Read [`docs/wireless/`](wireless/)**
-(9 files) for the full story. The load-bearing conclusions:
-
-- **OTA install** (`itms-services://` + a free trusted-HTTPS host) is the **proven robust
-  wireless path** — it worked *through* the mesh. The device **pulls** an Ad-Hoc-signed
-  IPA over outbound HTTPS and the OS installs it; nothing connects *into* the device.
-  **Requires a paid account + Ad-Hoc distribution signing** (`get-task-allow=false`);
-  free/development signing is silently dropped by `installd`.
-- Free trusted HTTPS for a LAN box: **`local-ip.co`** (public DNS `<dashed-ip>.my.local-ip.co`
-  → LAN IP + an iOS-trusted **GlobalSign** wildcard cert). **Gotcha:** their `chain.pem`
-  is a stale mismatched Sectigo chain — fetch the real GlobalSign G3 intermediate via the
-  leaf's AIA.
-- **Direct-IP install** (lockdown/AFC by IP, bypassing mDNS via an `idevice_new_network`
-  patch) works on friendly networks and is free-tier compatible, but the Eero mesh
-  **actively RSTs inbound dynamic high-port TCP**, so it's fragile there.
-- **Beacon** (the device UDP-pings the Mac) gives zero-scan, DHCP-proof discovery and
-  works through the mesh — but an **iOS app cannot reach its own `lockdownd`** (sandbox),
-  which kills on-device self-install. SideStore solves that with a WireGuard **loopback
-  VPN** + minimuxer (see `docs/wireless/07`).
-- **Recommended UX:** a **QR "refresh portal"** — the Mac hosts a page listing every
-  managed app with one-tap OTA links; SideStep shows a QR of the current URL. Expiry-proof
-  (unlike a companion app).
+| `NativeBridge/` | `native_bridge_zsign_sign` (ALTSigner → zsign). |
+| `Helpers/idevice/` + `idevicehelper.c` | Bundled libimobiledevice tools (list/install/uninstall); `idevice_ipinstall.c` = direct-IP + heartbeat. |
+| `notarize-build.sh` + `SideStep.entitlements` + `VERSION.txt` | Developer-ID + hardened + notarized DMG (notary profile `bping-notary`); auto-bumps VERSION. |
+| `bundle-app.sh` | Repo-relative dev build → `SideStep.app`. |
+| `~/altstore-fork/rebuild-app.sh` | John's local dev build (**not in repo**). |
 
 ## Build & run
 
 ```bash
 cd ~/altstore-fork/AltSign-SS
-swift build --product InstallerApp        # compile the app
-~/altstore-fork/rebuild-app.sh            # bundle → /Applications/AI Apps/SideStep.app + ad-hoc sign
-open "/Applications/AI Apps/SideStep.app"
+swift build --product InstallerApp          # compile the app
+~/altstore-fork/rebuild-app.sh              # bundle → /Applications/AI Apps/SideStep.app
+open "/Applications/AI Apps/SideStep.app"   # menu-bar crate icon (no Dock icon)
 ```
-- It's a **menu-bar app** (LSUIElement, no Dock icon) — look for the crate icon.
-- Logs: `~/Library/Logs/SideStep.log`.
-- For a shippable build: `./notarize-build.sh` (needs the Developer-ID cert + `bping-notary`).
 
-## Safety / conventions (important)
+- Beacon: `bash BeaconInject/build.sh` re-encodes `Helpers/beacon_payload.dat`.
+- Release: `./notarize-build.sh` → notarize + staple → `gh release create` (see
+  CURRENT-STATE). **Versioning contract:** `CFBundleShortVersionString` must equal the
+  release tag or the in-app updater never fires.
+- Logs: `~/Library/Logs/SideStep.log`; crash-safe `/tmp/sidestep.log`.
 
-- **Don't commit or push until asked.** The repo pushes are authorized per-request; the
-  standing rule is review-first.
-- **Signing certs & keys are the user's** — never bulk-export keychain credentials. The
-  product signs with **zsign**, not codesign; a corrupt *codesign* identity does not
-  affect production.
-- **Test devices** belong to the user; installs/uninstalls touch real hardware. The
-  throwaway free Apple ID for testing is `johnbuckman@moodmixes.com`; the paid team is
-  `XLS3XF57J8` (Decent Espresso). Don't touch the user's primary Apple ID.
-- Full session history and per-file detail is in the user's memory
-  (`wireless_install_research.md` and `iwish_altstore_nested_dylib_fail.md`).
+## Legacy code you can ignore (from the dropped approaches)
 
-## Current open work
+Not part of the current model — safe to ignore, and candidates for removal:
+`SideloaderKit/OTAHost.swift`, `SideloaderKit/IPAInspector.swift`, the QR/OTA +
+UDID-capture bits in `App.swift` (`startOTA`, `QRView`, `captureUDID`), the
+`Helpers/idevice_*.c` Wi-Fi-mesh experiments (`idevice_netinstall`/`ipprobe`/`setwifi`,
+`sweep.sh`), and the whole `docs/wireless/` research folder + `docs/SideStep.pdf` /
+`.pptx` slide decks.
 
-- Wire the **QR/OTA install path** into the app (a USB-vs-QR choice after picking an IPA;
-  IPA file association so a double-clicked `.ipa` opens the app with those options).
-- Fold `idevice_new_network` into the **bundled** libimobiledevice so the direct-IP tools
-  link in production.
-- Optionally: the SideStore-style VPN-loopback stack for a fully computer-free free-tier
-  refresher (large effort; OTA is the better near-term path).
+## Safety / conventions
+
+- **Don't commit or push until asked** — review-first is the standing rule; push to
+  `sidestep`, never `origin`.
+- **Signing certs & keys are the user's** — never bulk-export Keychain credentials.
+- **Test devices are the user's** — installs/uninstalls touch real hardware. Testing
+  Apple ID: `johnbuckman@moodmixes.com` (free); paid team `XLS3XF57J8` (Decent). Never
+  touch the user's primary Apple ID.
