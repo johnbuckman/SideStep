@@ -317,13 +317,39 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     }
     // NSAlert, not a SwiftUI popover dialog: the menu-bar popover closes the moment
     // focus leaves it, which was tearing down every in-panel picker/sheet/textfield.
+    /// (bundleID, name) of the app about to be installed, for matching prior installs.
+    private func pendingAppIdentity() -> (bundleID: String?, name: String?) {
+        switch pendingKind {
+        case .source(let app): return (app.bundleIdentifier, app.name)
+        case .ipa:             return (nil, installAppName)
+        case .none:            return (nil, nil)
+        }
+    }
+    /// Apple IDs that have already installed this app (matched by original bundle id,
+    /// else by name). Reusing one avoids spending another of that ID's 3 app slots.
+    private func priorAppleIDs(bundleID: String?, name: String?) -> Set<String> {
+        var ids = Set<String>()
+        for t in Tracked.all() {
+            if let b = bundleID, !b.isEmpty, t.origBundleID == b { ids.insert(t.appleID) }
+            else if let n = name, !n.isEmpty, t.name.caseInsensitiveCompare(n) == .orderedSame { ids.insert(t.appleID) }
+        }
+        return ids
+    }
+
     func presentAccountPicker() {
         NSApp.activate(ignoringOtherApps: true)
+        let (bid, nm) = pendingAppIdentity()
+        let prior = priorAppleIDs(bundleID: bid, name: nm)
+        // Put an Apple ID already used for this app first (recommended) and label it,
+        // so the user reuses it instead of burning a slot on another ID.
+        let ordered = accounts.sorted { (prior.contains($0.appleID) ? 0 : 1) < (prior.contains($1.appleID) ? 0 : 1) }
         let a = NSAlert(); a.messageText = "Which Apple account?"
-        for acc in accounts { a.addButton(withTitle: acc.displayName) }
+        for acc in ordered {
+            a.addButton(withTitle: prior.contains(acc.appleID) ? "\(acc.displayName)  (previously used for this app)" : acc.displayName)
+        }
         a.addButton(withTitle: "Cancel")
         let idx = a.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-        if idx >= 0 && idx < accounts.count { chooseAccount(accounts[idx].appleID) }
+        if idx >= 0 && idx < ordered.count { chooseAccount(ordered[idx].appleID) }
     }
     func chooseAccount(_ id: String) {
         guard let acc = accounts.first(where: { $0.appleID == id }), okToInstall(acc) else { return }
@@ -478,9 +504,45 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                 await MainActor.run { self.status = result; self.maybeShowTrustHint(appleID: account.appleID) }
             } catch {
                 dlog("execute: INSTALL FAILED — \(String(reflecting: error))")
+                if case SideErr.deviceLimit(let aid, let devName, let bid, let others) = error {
+                    await MainActor.run { self.installing = false; self.presentDeviceLimitRetry(appleID: aid, deviceName: devName, bundleID: bid, others: others, udid: udid) }
+                    return
+                }
                 await MainActor.run { self.status = "Failed: \(error.localizedDescription)" }
             }
             await MainActor.run { self.tracked = Tracked.all(); self.installing = false }
+        }
+    }
+
+    /// Apple refused to register this device (hit the per-Apple-ID device limit).
+    /// Explain it and, if other Apple IDs are set up, offer one-tap retry on each.
+    @MainActor
+    func presentDeviceLimitRetry(appleID: String, deviceName: String, bundleID: String, others: [String], udid: String) {
+        let a = NSAlert()
+        a.messageText = "Apple won’t register \(deviceName.isEmpty ? "this device" : "“\(deviceName)”")"
+        a.alertStyle = .warning
+        var info = "The Apple ID \(appleID) has reached Apple’s limit on how many devices it can register, so this device can’t be added — that’s why iOS wouldn’t install the app. Apple doesn’t let a free Apple ID remove old devices, so to install on more devices, use a different Apple ID."
+        // Prefer an Apple ID already used for THIS app — reusing it doesn't spend
+        // another of that ID's 3 app slots. Show those first, labelled.
+        let prior = priorAppleIDs(bundleID: bundleID, name: nil)
+        let choices = Array(others.sorted { (prior.contains($0) ? 0 : 1) < (prior.contains($1) ? 0 : 1) }.prefix(3))
+        if choices.isEmpty {
+            info += "\n\nAdd another Apple ID in SideStep (Add account), then try again."
+        } else {
+            info += "\n\nInstall with a different Apple ID:"
+            for aid in choices { a.addButton(withTitle: prior.contains(aid) ? "Use \(aid)  (previously used for this app)" : "Use \(aid)") }
+        }
+        a.addButton(withTitle: "Cancel")
+        a.informativeText = info
+        NSApp.activate(ignoringOtherApps: true)
+        let resp = a.runModal()
+        let idx = resp.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        if idx >= 0 && idx < choices.count {
+            chosenAppleID = choices[idx]               // pendingKind is still set — retry the same install
+            status = "Retrying on \(choices[idx])…"
+            execute(udid: udid)
+        } else {
+            status = "Install cancelled — \(appleID) can’t register more devices."
         }
     }
 
@@ -869,7 +931,8 @@ struct ContentView: View {
                             DisclosureGroup(isExpanded: appBinding("\(acc.appleID)/\(grp.key)")) {
                                 VStack(alignment: .leading, spacing: 3) {
                                     ForEach(grp.devices) { t in
-                                        let devLabel = t.deviceName.isEmpty ? t.udid : t.deviceName
+                                        let devLabel = !t.deviceName.isEmpty ? t.deviceName
+                                            : (DeviceIPCache.name(for: t.udid) ?? t.udid)
                                         HStack(alignment: .top, spacing: 6) {
                                             Image(systemName: m.deviceIcon(devLabel)).frame(width: 20).foregroundStyle(.secondary)
                                             VStack(alignment: .leading, spacing: 0) {

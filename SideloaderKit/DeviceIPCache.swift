@@ -31,4 +31,28 @@ public enum DeviceIPCache {
         let v = load()[udid]
         return (v?.isEmpty == false) ? v : nil
     }
+
+    // ---- device names (so the UI shows "Bugsy's iPad", not a raw UDID, even for
+    //      devices only ever seen over Wi-Fi, which usbmuxd won't list) ----
+    static let namePath = SideStepSupportDir + "/device-names.json"
+    private static func loadNames() -> [String: String] {
+        guard let d = try? Data(contentsOf: URL(fileURLWithPath: namePath)),
+              let m = try? JSONDecoder().decode([String: String].self, from: d) else { return [:] }
+        return m
+    }
+    /// Record a device's human name (from a USB listing or a beacon). No-op if blank/unchanged.
+    public static func rememberName(_ udid: String, name: String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !udid.isEmpty, !n.isEmpty, n != udid else { return }
+        var m = loadNames()
+        if m[udid] == n { return }
+        m[udid] = n
+        try? FileManager.default.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
+        if let d = try? JSONEncoder().encode(m) { try? d.write(to: URL(fileURLWithPath: namePath)) }
+    }
+    /// Best human name for a device, if we've ever seen one.
+    public static func name(for udid: String) -> String? {
+        let v = loadNames()[udid]
+        return (v?.isEmpty == false) ? v : nil
+    }
 }

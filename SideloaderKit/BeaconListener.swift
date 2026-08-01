@@ -111,6 +111,9 @@ public final class BeaconListener: NSObject {
         guard text.hasPrefix("BEACON"), field(text, "unlocked") == "1",
               let udid = field(text, "udid"), let bundle = field(text, "bundleid") else { return }
         DeviceIPCache.remember(udid, ip: ip)   // so a later manual Refresh can reach it by IP
+        if let nm = field(text, "name"), !nm.isEmpty {   // beacon sends spaces as underscores
+            DeviceIPCache.rememberName(udid, name: nm.replacingOccurrences(of: "_", with: " "))
+        }
         let key = "\(udid)|\(bundle)"
         let now = Date()
         if busy {

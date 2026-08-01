@@ -10,7 +10,17 @@ import Security
 
 public enum SideErr: LocalizedError {
     case fail(String)
-    public var errorDescription: String? { if case .fail(let s) = self { return s }; return nil }
+    /// The device couldn't be registered because this Apple ID hit Apple's per-type
+    /// device-registration limit. Carries the account it failed on, the device's name,
+    /// and the other Apple IDs already in SideStep (so the UI can offer a retry).
+    case deviceLimit(appleID: String, deviceName: String, bundleID: String, others: [String])
+    public var errorDescription: String? {
+        switch self {
+        case .fail(let s): return s
+        case .deviceLimit(let aid, let dev, _, _):
+            return "Apple won’t register \(dev.isEmpty ? "this device" : "“\(dev)”") on \(aid) — it has reached Apple’s limit on how many devices this Apple ID can register. Install with a different Apple ID to add more devices."
+        }
+    }
 }
 
 public func cont<T>(_ body: (@escaping (T?, Error?) -> Void) -> Void) async throws -> T {
@@ -554,6 +564,7 @@ public struct Sideloader {
             seen.insert(u)
             let name = parts.count > 1 && !parts[1].isEmpty ? parts[1] : u
             let conn = parts.count > 2 ? parts[2] : "usb"   // older helpers omit the column
+            DeviceIPCache.rememberName(u, name: name)   // so Wi-Fi-only installs can still show a name
             return (u, name, conn)
         }
     }
@@ -686,7 +697,12 @@ public struct Sideloader {
         let teams: [ALTTeam] = try await cont { api.fetchTeams(for: account, session: session, completionHandler: $0) }
         guard let team = resolveTeam(for: account, from: teams) else { throw SideErr.fail("No teams on this Apple ID") }
         log("Team: \(team.name). Registering iPad…")
-        let _: ALTDevice? = try? await cont { api.registerDevice(name: "iPad", identifier: iPadUDID, type: .iPad, team: team, session: session, completionHandler: $0) }
+        // Keep the registration error — Apple returns 5405 ("maximum number of
+        // registered iPad devices") here, and we must surface it rather than sign an
+        // app the device isn't provisioned for and falsely report success.
+        let regError: Error? = await withCheckedContinuation { (c: CheckedContinuation<Error?, Never>) in
+            api.registerDevice(name: "iPad", identifier: iPadUDID, type: .iPad, team: team, session: session) { _, err in c.resume(returning: err) }
+        }
 
         let cert = try await provisionCertificate(account: account, session: session, team: team, log: log)
 
@@ -718,6 +734,22 @@ public struct Sideloader {
         if let f = existing.first(where: { $0.bundleIdentifier == bundleID }) { appID = f }
         else { appID = try await api.addAppID(withName: "\(displayName) (SideStep)", bundleIdentifier: bundleID, team: team, session: session) }
         let profile = try await api.fetchProvisioningProfile(for: appID, deviceType: .iPad, team: team, session: session)
+        // If the target device isn't in the profile, iOS will reject the install on
+        // device with 0xe8008015 ("no valid provisioning profile") and show the user a
+        // misleading "integrity could not be verified" — even though SideStep signed
+        // fine. Catch it here with the real reason instead of reporting a false success.
+        if !profile.deviceIDs.contains(where: { $0.caseInsensitiveCompare(iPadUDID) == .orderedSame }) {
+            let devName = connectedDevices().first(where: { $0.udid == iPadUDID })?.name
+                ?? DeviceIPCache.name(for: iPadUDID) ?? ""
+            let regText = (regError.map { "\($0.localizedDescription) \(String(describing: $0))" } ?? "").lowercased()
+            if regText.contains("maximum number of registered") || regText.contains("5405") {
+                let others = AccountStore.records().map { $0.appleID }.filter { $0 != account.appleID }
+                log("device \(iPadUDID) not provisioned — Apple device limit reached on \(account.appleID)")
+                throw SideErr.deviceLimit(appleID: account.appleID, deviceName: devName, bundleID: origBundleID, others: others)
+            }
+            throw SideErr.fail("\(devName.isEmpty ? "This device" : "“\(devName)”") isn’t registered with \(account.appleID), so iOS won’t install this app on it. Connect it once by USB and try again."
+                + (regError.map { " (\($0.localizedDescription))" } ?? ""))
+        }
         log("Signing \(displayName)… (profile exp \(profile.expirationDate))")
 
         try run("/usr/libexec/PlistBuddy", ["-c", "Set :CFBundleIdentifier \(bundleID)", plist])
@@ -810,7 +842,11 @@ public struct Sideloader {
             throw SideErr.fail("Can’t reach this device to update it. Open \(displayName) on the device once so it checks in over Wi-Fi, or connect it by USB — then tap Refresh again.")
         }
 
-        let deviceName = connectedDevices().first(where: { $0.udid == iPadUDID })?.name ?? ""
+        // Prefer the live USB/Wi-Fi listing; fall back to a name remembered from a
+        // prior USB connection or beacon, so a Wi-Fi-only install still shows a real
+        // name instead of the raw UDID.
+        let deviceName = connectedDevices().first(where: { $0.udid == iPadUDID })?.name
+            ?? DeviceIPCache.name(for: iPadUDID) ?? ""
         var rec = TrackedApp(name: displayName, origBundleID: origBundleID, source: cachePath,
                              installedBundleID: bundleID, appleID: account.appleID, udid: iPadUDID,
                              deviceName: deviceName, validityDays: team.type == .free ? 7 : 365,

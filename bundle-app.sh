@@ -28,7 +28,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>SideStep</string>
   <key>CFBundleDisplayName</key><string>SideStep</string>
-  <key>CFBundleIdentifier</key><string>com.decent.sidestep</string>
+  <key>CFBundleIdentifier</key><string>com.johnbuckman.sidestep</string>
   <key>CFBundleExecutable</key><string>SideStep</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
