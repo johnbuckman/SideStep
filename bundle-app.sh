@@ -3,6 +3,9 @@
 #   ./bundle-app.sh [output-dir]     default output: /Applications/SideStep.app
 set -e
 cd "$(dirname "$0")"
+# Version comes from VERSION.txt (same source as notarize-build.sh), so a local
+# test build shows the same number the in-app updater compares against.
+SHORT_VERSION="$(tr -d ' \n' < VERSION.txt)"
 # Force a relink: swift build sometimes recompiles a changed module but skips
 # relinking the executable, which silently bundles a stale binary.
 rm -f "$(swift build --show-bin-path)/InstallerApp"
@@ -16,8 +19,10 @@ cp -R "$BINDIR/OpenSSL.framework" "$APP/Contents/MacOS/OpenSSL.framework"
 cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 mkdir -p "$APP/Contents/Helpers"
 cp -R Helpers/idevice "$APP/Contents/Helpers/idevice"   # libimobiledevice device tools (no Python)
+cp Helpers/beacon_payload.dat "$APP/Contents/Resources/beacon_payload.dat"  # iOS beacon dylib injected into installs
+[ -f blocklist.json ] && cp blocklist.json "$APP/Contents/Resources/blocklist.json"  # anti-piracy offline fallback
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -27,8 +32,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>SideStep</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>0.2</string>
-  <key>CFBundleShortVersionString</key><string>0.2</string>
+  <key>CFBundleVersion</key><string>$SHORT_VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$SHORT_VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>

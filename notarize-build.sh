@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-IDENTITY="${SIDESTEP_IDENTITY:-Developer ID Application: Vid Tadel (XLS3XF57J8)}"
+IDENTITY="${SIDESTEP_IDENTITY:-Developer ID Application: John Buckman (CDZD6VH5KL)}"
 # Version comes from VERSION.txt and auto-increments its patch number every build
 # (0.2.1 → 0.2.2 → …). CFBundleShortVersionString == the release tag, so the in-app
 # updater's tag-vs-version comparison works.
@@ -43,7 +43,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleName</key><string>SideStep</string>
   <key>CFBundleDisplayName</key><string>SideStep</string>
-  <key>CFBundleIdentifier</key><string>com.decent.sidestep</string>
+  <key>CFBundleIdentifier</key><string>com.johnbuckman.sidestep</string>
   <key>CFBundleExecutable</key><string>SideStep</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -67,6 +67,8 @@ SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevicehelper"
 SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevice_ipinstall"
 # Developer Mode detect/reveal helper
 SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevicedevmodectl"
+# Wi-Fi-sync enabler (lockdown EnableWifiConnections over the USB trusted session)
+SIGN --entitlements "$ENT" "$APP/Contents/Helpers/idevice/idevice_wifienable"
 # OpenSSL framework linked by the app
 SIGN "$APP/Contents/MacOS/OpenSSL.framework/Versions/A/OpenSSL"
 SIGN "$APP/Contents/MacOS/OpenSSL.framework"

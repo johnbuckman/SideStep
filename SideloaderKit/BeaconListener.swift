@@ -14,6 +14,7 @@ public final class BeaconListener: NSObject {
     private var fd: Int32 = -1
     private var advertiser: NetService?
     private var busy = false
+    private var currentKey: String? = nil        // the (udid|bundleid) currently installing, if any
     private var lastPush: [String: Date] = [:]   // per (udid|bundleid), debounce the packet burst
     private var log: (String) -> Void = { _ in }
 
@@ -109,14 +110,23 @@ public final class BeaconListener: NSObject {
         let ip = String(cString: ipbuf)
         guard text.hasPrefix("BEACON"), field(text, "unlocked") == "1",
               let udid = field(text, "udid"), let bundle = field(text, "bundleid") else { return }
+        DeviceIPCache.remember(udid, ip: ip)   // so a later manual Refresh can reach it by IP
         let key = "\(udid)|\(bundle)"
         let now = Date()
-        if busy { return }
-        if let last = lastPush[key], now.timeIntervalSince(last) < 60 { return }
+        if busy {
+            // A burst of beacons for the SAME app that's already installing is normal —
+            // don't cry "another update". Only a DIFFERENT device/app is really blocked.
+            if key == currentKey { sendStatus("Still updating — hang on…", to: from) }
+            else { sendStatus("Mac is busy with another update — hold on…", to: from) }
+            return
+        }
+        if let last = lastPush[key], now.timeIntervalSince(last) < 60 {
+            sendStatus("Mac got your request — just a moment…", to: from); return
+        }
         guard let app = Tracked.all().first(where: { $0.udid == udid && $0.installedBundleID == bundle }) else {
             log("beacon from \(ip): no tracked app for \(bundle) on \(udid)"); return
         }
-        busy = true; lastPush[key] = now
+        busy = true; currentKey = key; lastPush[key] = now
         log("beacon from \(ip): \(bundle) — refreshing over Wi-Fi")
         sendStatus("Mac heard your request…", to: from)
         setenv("IWISH_IP", ip, 1)   // target the device by the IP the beacon came from
@@ -144,8 +154,18 @@ public final class BeaconListener: NSObject {
             if let f = BeaconListener.friendly(msg) { self.sendStatus(f, to: from) }
         }
         Task {
-            defer { self.q.async { self.busy = false; self.lastPush[key] = Date() } }
-            do { _ = try await Sideloader.refreshOne(app, log: statusLog) }
+            // Clear the target IP when done so it can't leak into a later manual
+            // Refresh (which must route by the device's live connection type).
+            defer { unsetenv("IWISH_IP") }
+            defer { self.q.async { self.busy = false; self.currentKey = nil; self.lastPush[key] = Date() } }
+            do {
+                _ = try await Sideloader.refreshOne(app, log: statusLog)
+                // The USB path doesn't stream upload PROGRESS, so the on-device beacon
+                // never reaches the pct>=100 that triggers its exit-to-apply-the-swap.
+                // Send a final 100% on success so the app relaunches into the new build
+                // no matter which transport was used.
+                self.sendProgress(pct: 100, eta: 0, to: from)
+            }
             catch { self.sendStatus("Update failed — will retry later.", to: from); self.log("beacon refresh failed: \(error)") }
         }
     }

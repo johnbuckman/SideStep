@@ -18,7 +18,7 @@ final class UpdateChecker {
     private let releasesPage = URL(string: "https://github.com/johnbuckman/SideStep/releases")!
     private let lastCheckKey = "sidestep.lastUpdateCheck"
     private let checkInterval: TimeInterval = 24 * 60 * 60
-    private let teamID = "XLS3XF57J8"   // required Developer ID team of any downloaded build
+    private let teamID = "CDZD6VH5KL"   // required Developer ID team of any downloaded build
     private var busy = false
 
     var currentVersion: String {

@@ -487,6 +487,29 @@ public struct Sideloader {
         return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/beacon_payload.dat").expandingTildeInPath  // dev fallback
     }
 
+    static func wifiEnablePath() -> String {
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice/idevice_wifienable").path
+        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
+        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/idevice/idevice_wifienable").expandingTildeInPath  // dev fallback
+    }
+
+    /// Best-effort: over the USB trusted session, turn on the device's "Show this
+    /// device when on Wi-Fi" (lockdown EnableWifiConnections) so future beacon /
+    /// direct-IP installs can open a trusted Wi-Fi session. The tool reads the value
+    /// back to confirm the change stuck; only if it genuinely couldn't do we tell the
+    /// user how to set it by hand — they should otherwise never see that message.
+    static func enableWifiSync(_ udid: String, log: (String) -> Void) {
+        let tool = wifiEnablePath()
+        guard FileManager.default.isExecutableFile(atPath: tool) else { return }
+        let out = (try? run(tool, [udid])) ?? ""
+        if out.contains("WIFI-SYNC OK") {
+            log("Wi-Fi updates are enabled on this device.")
+        } else if out.contains("WIFI-SYNC MANUAL") {
+            log("⚠️ Couldn’t turn on Wi-Fi updates for this device automatically. To enable wireless updates: keep it connected by USB, open Finder → click the device → General tab → tick “Show this iPhone/iPad when on Wi-Fi” → Apply. (USB installs keep working regardless.)")
+        }
+        // WIFI-SYNC SKIP / empty output: device isn't on USB, or tool missing — stay silent.
+    }
+
     /// This Mac's own LAN IPv4 on the interface that would reach `facing` (the
     /// device IP), via the connected-UDP-socket getsockname trick. The beacon
     /// unicasts to this as its fast path; broadcast + Bonjour cover IP changes.
@@ -740,26 +763,51 @@ public struct Sideloader {
             log("kept signed ipa at \(keep)")
         }
 
-        let out: String
-        if let ip = ProcessInfo.processInfo.environment["IWISH_IP"], !ip.isEmpty {
-            // Direct-IP install: connect straight to the device's IP (which the
-            // on-device beacon supplies), bypassing usbmux's flaky Bonjour discovery.
+        // Route by the device's ACTUAL connection type — not by whether IWISH_IP
+        // happens to be set. A device present on USB installs over usbmux (no network
+        // pairing needed, always reliable); only a Wi-Fi-only device needs direct-IP.
+        // (The beacon still sets IWISH_IP so we know the device's IP for the Wi-Fi case.)
+        let conn = connectedDevices().first(where: { $0.udid == iPadUDID })?.conn
+        // On USB we hold a trusted session — use it to switch on the device's
+        // "Show when on Wi-Fi" flag so future wireless updates work with no manual step.
+        if conn == "usb" { enableWifiSync(iPadUDID, log: log) }
+        let envIP = ProcessInfo.processInfo.environment["IWISH_IP"].flatMap { $0.isEmpty ? nil : $0 }
+        // A manual Refresh has no beacon to hand over the device IP, so fall back to the
+        // last IP we learned from this device's beacon — lets a Wi-Fi-only device refresh
+        // on demand, not only when it beacons.
+        let targetIP = envIP ?? DeviceIPCache.ip(for: iPadUDID)
+        func usbInstall() throws {
+            let r = try run(helperPath(), ["install", iPadUDID, ipa.path], cwd: work)
+            log("install: \(r.split(separator: "\n").last.map(String.init) ?? r)")
+            guard r.contains("INSTALL OK") else { throw SideErr.fail("install failed: \(r.suffix(160))") }
+        }
+        if conn == "usb" {
+            // USB (usbmux) — reliable, no network pairing needed.
+            try usbInstall()
+        } else if let ip = targetIP {
+            // Direct-IP install: connect straight to the device's IP (beacon-supplied or
+            // remembered), bypassing usbmux's flaky Bonjour discovery.
             log("Installing by direct IP \(ip)…")
-            out = try runStreaming(ipInstallPath(), [iPadUDID, ip, ipa.path], cwd: work, onLine: { log($0) })
-            if !out.contains("DIRECT-IP INSTALL OK") {
-                // The most common Wi-Fi failure is that this Mac has never paired with
-                // the device — turn the cryptic "lockdown handshake / err -21 / no pair
-                // record" into plain guidance.
-                let lc = out.lowercased()
-                if lc.contains("pair record") || lc.contains("handshake by ip") || lc.contains("err -21") {
-                    throw SideErr.fail("This device hasn’t been paired with this Mac yet, so it can’t be reached over Wi-Fi. Connect it once with a USB cable, unlock it, and tap “Trust This Computer” — that creates the pairing. After that, keep it unlocked and Wi-Fi installs will work.")
+            let ipOut = try runStreaming(ipInstallPath(), [iPadUDID, ip, ipa.path], cwd: work, onLine: { log($0) })
+            if !ipOut.contains("DIRECT-IP INSTALL OK") {
+                if connectedDevices().contains(where: { $0.udid == iPadUDID }) {
+                    // Still reachable via usbmux (cable, or Wi-Fi-listed) — let it route.
+                    log("Direct-IP failed; device is in the device list — falling back to usbmux…")
+                    try usbInstall()
+                } else {
+                    let lc = ipOut.lowercased()
+                    if lc.contains("pair record") || lc.contains("handshake by ip") || lc.contains("err -21") || lc.contains("err -8") {
+                        throw SideErr.fail("Couldn’t open a trusted Wi-Fi session with this device. Two things enable wireless installs: (1) plug it in once via USB, unlock, and tap “Trust This Computer”; and (2) in Finder, click the device → General → tick “Show this iPhone/iPad when on Wi-Fi” → Apply. Then keep the device unlocked and try again. (Until then, a USB cable always works.)")
+                    }
+                    throw SideErr.fail("Wi-Fi install failed. Make sure the device is unlocked and on the same network, then try again. (\(ipOut.suffix(160)))")
                 }
-                throw SideErr.fail("Wi-Fi install failed. Make sure the device is unlocked and on the same network, then try again. (\(out.suffix(160)))")
             }
+        } else if connectedDevices().contains(where: { $0.udid == iPadUDID }) {
+            // In the usbmux list (Wi-Fi sync) but we have no IP for it — let usbmux route it.
+            try usbInstall()
         } else {
-            out = try run(helperPath(), ["install", iPadUDID, ipa.path], cwd: work)
-            log("install: \(out.split(separator: "\n").last.map(String.init) ?? out)")
-            guard out.contains("INSTALL OK") else { throw SideErr.fail("install failed: \(out.suffix(160))") }
+            // Not on USB, not in the device list, no remembered IP — we can't reach it.
+            throw SideErr.fail("Can’t reach this device to update it. Open \(displayName) on the device once so it checks in over Wi-Fi, or connect it by USB — then tap Refresh again.")
         }
 
         let deviceName = connectedDevices().first(where: { $0.udid == iPadUDID })?.name ?? ""

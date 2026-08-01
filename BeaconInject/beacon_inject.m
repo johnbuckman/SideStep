@@ -84,6 +84,26 @@ static void profileDates(NSDate **created, NSDate **expires) {
     *created = d[@"CreationDate"]; *expires = d[@"ExpirationDate"];
 }
 
+// ---------- persisted last auto-update attempt + outcome (shown in the popup) ----------
+// So that, hours later, the diagnostics popup can answer: did it try? when? and
+// if it failed, why. Stored in the app's own NSUserDefaults (survives launches).
+static NSString * const kAttemptAt = @"ss_attemptAt";
+static NSString * const kAttemptWhy = @"ss_attemptWhy";
+static NSString * const kResultAt = @"ss_resultAt";
+static NSString * const kResult = @"ss_result";
+static NSString * const kResultOK = @"ss_resultOK";
+static void recordAttempt(NSString *why) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setObject:[NSDate date] forKey:kAttemptAt];
+    [d setObject:(why ?: @"?") forKey:kAttemptWhy];
+}
+static void recordResult(NSString *text, BOOL ok) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setObject:[NSDate date] forKey:kResultAt];
+    [d setObject:(text ?: @"?") forKey:kResult];
+    [d setBool:ok forKey:kResultOK];
+}
+
 // ---------- send the beacon everywhere we can reach the Mac ----------
 static void sendTo(int s, const char *ip, const char *msg, size_t len) {
     if (!ip || !*ip) return;
@@ -137,7 +157,7 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
     struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     sendBeaconOn(s);
-    NSDate *start = [NSDate date]; BOOL sawAny = NO;
+    NSDate *start = [NSDate date]; BOOL sawAny = NO, noReplyRecorded = NO;
     while (-start.timeIntervalSinceNow < 240) {
         char buf[600]; struct sockaddr_in from; socklen_t fl = sizeof from;
         ssize_t n = recvfrom(s, buf, sizeof buf - 1, 0, (struct sockaddr *)&from, &fl);
@@ -146,14 +166,19 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
             if (strncmp(buf, "STATUS ", 7) == 0) {
                 sawAny = YES;
                 NSString *t = [[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                NSString *lc = t.lowercaseString;
+                if ([lc containsString:@"complete"] || [lc containsString:@"relaunch"]) recordResult(t, YES);
+                else if ([lc containsString:@"failed"]) recordResult(t, NO);
                 dispatch_async(dispatch_get_main_queue(), ^{ onStatus(t); });
-                if ([t.lowercaseString containsString:@"failed"]) break;
+                if ([lc containsString:@"failed"]) break;
             } else if (strncmp(buf, "PROGRESS ", 9) == 0) {
                 sawAny = YES;
                 int pct = -1, eta = -1; sscanf(buf + 9, "%d %d", &pct, &eta);
+                if (pct >= 100) recordResult(@"Update delivered (100%).", YES);
                 dispatch_async(dispatch_get_main_queue(), ^{ onProgress(pct, eta); });
             }
         } else if (!sawAny && -start.timeIntervalSinceNow > 12) {
+            if (!noReplyRecorded) { recordResult(@"No reply — is SideStep running on your Mac?", NO); noReplyRecorded = YES; }
             dispatch_async(dispatch_get_main_queue(), ^{ onStatus(@"No reply yet — is SideStep running on your Mac?"); });
         }
     }
@@ -182,13 +207,50 @@ static void rescheduleExpiryNotification(void) {
     [c addNotificationRequest:[UNNotificationRequest requestWithIdentifier:NOTIF_ID content:ct trigger:tr] withCompletionHandler:nil];
 }
 
+// Automatic (no-UI) beacon that ALSO listens briefly and PERSISTS the outcome,
+// so a background / launch auto-update leaves a record the popup can show later.
+// Runs off the main thread; calls `done` on the main thread when finished.
+static void autoBeaconTracked(int maxSec, void (^done)(void)) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        int s = socket(AF_INET, SOCK_DGRAM, 0);
+        if (s < 0) { if (done) dispatch_async(dispatch_get_main_queue(), done); return; }
+        int on = 1; setsockopt(s, SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
+        struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        sendBeaconOn(s);
+        NSDate *start = [NSDate date]; BOOL sawAny = NO, terminal = NO;
+        while (-start.timeIntervalSinceNow < maxSec && !terminal) {
+            char buf[600]; ssize_t n = recvfrom(s, buf, sizeof buf - 1, 0, NULL, NULL);
+            if (n <= 0) continue;
+            buf[n] = 0;
+            if (strncmp(buf, "STATUS ", 7) == 0) {
+                sawAny = YES;
+                NSString *t = [[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                NSString *lc = t.lowercaseString;
+                if ([lc containsString:@"failed"]) { recordResult(t, NO); terminal = YES; }
+                else if ([lc containsString:@"complete"] || [lc containsString:@"relaunch"]) { recordResult(t, YES); terminal = YES; }
+            } else if (strncmp(buf, "PROGRESS ", 9) == 0) {
+                sawAny = YES; int pct = -1; sscanf(buf + 9, "%d", &pct);
+                if (pct >= 100) { recordResult(@"Update delivered (100%).", YES); terminal = YES; }
+            }
+        }
+        if (!sawAny) recordResult(@"No reply — SideStep wasn’t reachable (Mac asleep/off, or not on the same Wi-Fi).", NO);
+        close(s);
+        if (done) dispatch_async(dispatch_get_main_queue(), done);
+    });
+}
+
 // ---------- the core ----------
 static void maybeUpdate(const char *why) {
     g_lastReason = [NSString stringWithUTF8String:why];
     NSDate *created, *expires; profileDates(&created, &expires);
     NSTimeInterval age = created ? -created.timeIntervalSinceNow : 1e12;
     NSLog(@"[beacon] check (%s): profile age %.0fs, threshold %ds", why, age, g_updateSec);
-    if (age > g_updateSec) { NSLog(@"[beacon] stale -> beaconing"); sendBeacon(); }
+    if (age > g_updateSec) {
+        NSLog(@"[beacon] stale -> beaconing");
+        recordAttempt(g_lastReason);
+        autoBeaconTracked(25, nil);   // send + listen + persist outcome for the popup
+    }
     rescheduleExpiryNotification();
 }
 
@@ -250,12 +312,22 @@ static NSString *vitalsText(void) {
     NSTimeInterval ageS = created ? -created.timeIntervalSinceNow : -1;
     NSTimeInterval expS = expires ? expires.timeIntervalSinceNow : -1;
     BOOL stale = ageS > g_updateSec;
+    // Last automatic-update attempt + its outcome (persisted across launches) — so
+    // opening this popup after (say) 24h answers: did it try, and if so why did it fail.
+    NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
+    NSDate *aAt = [ud objectForKey:kAttemptAt];
+    NSString *tryStr = aAt ? [NSString stringWithFormat:@"%@ (%@)", fmtAgo(aAt), [ud stringForKey:kAttemptWhy] ?: @"?"] : @"(none yet)";
+    NSDate *rAt = [ud objectForKey:kResultAt];
+    NSString *resStr = rAt
+        ? [NSString stringWithFormat:@"%@  (%@)\n            %@", [ud boolForKey:kResultOK] ? @"✓ OK" : @"✗ FAILED", fmtAgo(rAt), [ud stringForKey:kResult] ?: @"?"]
+        : @"(no attempt has reported back yet)";
     return [NSString stringWithFormat:
         @"APP\n  %@  v%@ (%@)\n  %@\n\n"
         @"SOURCE\n  found via: %@\n  %@\n\n"
         @"SIGNING PROFILE\n  team:     %@\n  profile:  %@\n  devices:  %d provisioned\n"
         @"  updated:  %@  (%@)\n  expires:  %@\n  in:       %.1f days\n\n"
-        @"UPDATER\n  interval: %d s\n  status:   %@\n  last chk: %@\n  beacons:  %d sent, last %@\n\n"
+        @"UPDATER\n  interval: %d s\n  status:   %@\n  last chk: %@\n  beacons:  %d sent, last %@\n"
+        @"  tried:    %@\n  result:   %@\n\n"
         @"DISCOVERY (Mac)\n  baked IP: %@ : %d\n  bonjour:  %@\n  unlocked: %@",
         info[@"CFBundleDisplayName"] ?: @"?", info[@"CFBundleShortVersionString"] ?: @"?", info[@"CFBundleVersion"] ?: @"?",
         info[@"CFBundleIdentifier"] ?: @"?",
@@ -264,6 +336,7 @@ static NSString *vitalsText(void) {
         fmtDate(created), fmtAgo(created), fmtDate(expires), expS/86400.0,
         g_updateSec, stale ? @"STALE → will beacon" : @"fresh", g_lastReason,
         g_beaconCount, fmtAgo(g_lastBeaconAt),
+        tryStr, resStr,
         g_macIP.length ? g_macIP : @"(none)", g_port, g_bonjourIP ?: @"(not resolved)",
         UIApplication.sharedApplication.isProtectedDataAvailable ? @"yes" : @"no (locked)"];
 }
@@ -606,7 +679,22 @@ static void requestNotificationsThenLocalNet(void) {
 static void onLaunch(void) {
     if (@available(iOS 13.0, *)) {
         [BGTaskScheduler.sharedScheduler registerForTaskWithIdentifier:BG_TASK_ID usingQueue:nil
-            launchHandler:^(BGTask *task) { maybeUpdate("bg"); scheduleBGRefresh(); [task setTaskCompletedWithSuccess:YES]; }];
+            launchHandler:^(BGTask *task) {
+                scheduleBGRefresh();
+                g_lastReason = @"bg";
+                NSDate *created, *expires; profileDates(&created, &expires);
+                NSTimeInterval age = created ? -created.timeIntervalSinceNow : 1e12;
+                rescheduleExpiryNotification();
+                if (age > g_updateSec) {
+                    // Record the attempt and listen for the outcome; only finish the
+                    // background task once the tracked beacon has persisted a result.
+                    recordAttempt(@"bg");
+                    [task setExpirationHandler:^{}];
+                    autoBeaconTracked(25, ^{ [task setTaskCompletedWithSuccess:YES]; });
+                } else {
+                    [task setTaskCompletedWithSuccess:YES];
+                }
+            }];
     }
     scheduleBGRefresh();
     // Attach the diagnostic gesture soon, but do NOT ask for permissions or touch
