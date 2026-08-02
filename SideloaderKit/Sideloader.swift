@@ -936,6 +936,25 @@ public struct Sideloader {
         return res
     }
 
+    /// Install a tracked app (known from any device) onto a DIFFERENT device, from
+    /// whatever source it originally came from. Used by the on-device installer to
+    /// copy an app you have on another device onto this one, over Wi-Fi.
+    @discardableResult
+    public static func installTracked(_ t: TrackedApp, onUDID udid: String,
+                                      account: ALTAccount, session: ALTAppleAPISession,
+                                      log: @escaping (String) -> Void) async throws -> String {
+        if !t.githubRepo.isEmpty {
+            return try await installFromGitHub(account: account, session: session, repo: t.githubRepo, iPadUDID: udid, log: log)
+        }
+        if t.origin.hasPrefix("http") {
+            let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+            let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log)
+            return try await install(account: account, session: session, appPath: appPath.path, source: t.origin, iPadUDID: udid, log: log)
+        }
+        return try await installFromIPA(account: account, session: session, filePath: t.source, iPadUDID: udid, log: log)
+    }
+
     /// Re-sign + (WiFi/USB) re-install one tracked app on its device.
     @discardableResult
     public static func refreshOne(_ t: TrackedApp, log: @escaping (String) -> Void) async throws -> String {

@@ -94,4 +94,20 @@ public enum GitHub {
         }
         return hits
     }
+
+    /// List a GitHub user's (or org's) public repos whose latest release contains an
+    /// .ipa. One API call for the repo list + one per repo probed; `scan` bounds the
+    /// probes against the rate limit.
+    public static func userReposWithIPA(_ user: String, scan: Int = 30) async -> [RepoHit] {
+        let u = user.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? user
+        guard let items = await apiJSON("https://api.github.com/users/\(u)/repos?per_page=100&sort=updated&type=owner") as? [[String: Any]] else { return [] }
+        var hits: [RepoHit] = []
+        for it in items.prefix(scan) {
+            guard let full = it["full_name"] as? String else { continue }
+            if let ipa = await latestIPA(repo: full) {
+                hits.append(RepoHit(repo: full, description: (it["description"] as? String) ?? "", ipa: ipa))
+            }
+        }
+        return hits
+    }
 }

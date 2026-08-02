@@ -598,7 +598,13 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     /// Install the newest .ipa from a GitHub repo (owner/name or a github.com URL),
     /// remembering the repo so the daily check + every refresh keep it current.
     func installFromGitHub(_ input: String) {
-        guard let repo = GitHub.normalizeRepo(input) else { status = "Enter a GitHub repo like owner/name."; return }
+        // A bare username (no "owner/name") → list that user's repos that ship an .ipa.
+        let core = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "https://github.com/", with: "")
+            .replacingOccurrences(of: "github.com/", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if !core.isEmpty && !core.contains("/") { installFromGitHubUser(core); return }
+        guard let repo = GitHub.normalizeRepo(input) else { status = "Enter a GitHub repo like owner/name, or just a username."; return }
         status = "Looking up \(repo) on GitHub…"
         Task { @MainActor in
             guard let rel = await GitHub.latestIPA(repo: repo) else { self.status = "No .ipa release found in \(repo)."; return }
@@ -628,6 +634,22 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             } else {
                 self.githubSearchNote = "No repositories with an .ipa release matched “\(q)”. (GitHub can't search release files, so this only matches repo names/descriptions — “Install from GitHub” by owner/name is more reliable.)"
             }
+        }
+    }
+
+    /// Bare-username install: show that user's repos that publish an .ipa, in the
+    /// GitHub results window, so the user can pick which to install.
+    func installFromGitHubUser(_ user: String) {
+        githubSearching = true; githubResults = []; githubSearchNote = "Finding \(user)'s apps on GitHub…"
+        showGitHubSearchWindow()
+        Task { @MainActor in
+            let hits = await GitHub.userReposWithIPA(user)
+            self.githubResults = hits; self.githubSearching = false
+            if !hits.isEmpty { self.githubSearchNote = "" ; return }
+            let remaining = await GitHub.coreRemaining()
+            self.githubSearchNote = (remaining ?? 99) < 3
+                ? "GitHub's hourly request limit is used up (60/hour without a sign-in). Wait a while and try again."
+                : "No public repositories with an .ipa release were found for “\(user)”."
         }
     }
 
@@ -1257,6 +1279,7 @@ struct InstallerApp: App {
             dlog("post-launch: RefreshDaemon started")
             dlog("post-launch: starting BeaconListener…")
             BeaconListener.shared.start(log: { print("[SideStep beacon] \($0)") })
+            InstallServer.shared.start(log: { print("[SideStep installsrv] \($0)") })
             dlog("post-launch: BeaconListener started")
             UpdateChecker.shared.checkIfDue()   // daily GitHub-Releases self-update check
             Task { await Blocklist.refresh() }  // pull the latest anti-piracy blocklist from the repo

@@ -374,6 +374,84 @@ static NSString *vitalsText(void) {
 - (void)reset { [self cancelTimer]; [super reset]; }
 @end
 
+// ---------- "Install more apps…" — talk to SideStep's TCP install server ----------
+static const uint16_t kInstallPort = 51235;
+
+// Blocking request/response (LIST, SEARCH): returns the Mac's full reply, or nil.
+static NSString *tcpAsk(NSString *ip, NSString *req) {
+    if (ip.length == 0) return nil;
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) return nil;
+    struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    struct sockaddr_in a; memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET; a.sin_port = htons(kInstallPort);
+    if (inet_pton(AF_INET, ip.UTF8String, &a.sin_addr) != 1) { close(s); return nil; }
+    if (connect(s, (struct sockaddr *)&a, sizeof a) != 0) { close(s); return nil; }
+    NSString *line = [req stringByAppendingString:@"\n"];
+    const char *m = line.UTF8String; send(s, m, strlen(m), 0);
+    NSMutableData *buf = [NSMutableData data]; char tmp[4096]; ssize_t n;
+    while ((n = recv(s, tmp, sizeof tmp, 0)) > 0) [buf appendBytes:tmp length:n];
+    close(s);
+    return [[NSString alloc] initWithData:buf encoding:NSUTF8StringEncoding];
+}
+
+// Streaming request (INSTALL): calls onLine on the main thread for each reply line,
+// then "__CLOSED__" when the Mac closes.
+static void tcpStream(NSString *ip, NSString *req, void (^onLine)(NSString *)) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        int s = socket(AF_INET, SOCK_STREAM, 0);
+        void (^emit)(NSString *) = ^(NSString *l){ dispatch_async(dispatch_get_main_queue(), ^{ onLine(l); }); };
+        if (s < 0) { emit(@"DONE fail no socket"); return; }
+        struct timeval tv = { .tv_sec = 300, .tv_usec = 0 };
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        struct sockaddr_in a; memset(&a, 0, sizeof a);
+        a.sin_family = AF_INET; a.sin_port = htons(kInstallPort);
+        if (inet_pton(AF_INET, ip.UTF8String, &a.sin_addr) != 1 || connect(s, (struct sockaddr *)&a, sizeof a) != 0) {
+            close(s); emit(@"DONE fail can’t reach your Mac — is SideStep running and on the same Wi-Fi?"); return;
+        }
+        NSString *line = [req stringByAppendingString:@"\n"];
+        const char *m = line.UTF8String; send(s, m, strlen(m), 0);
+        NSMutableData *acc = [NSMutableData data]; char tmp[2048]; ssize_t n;
+        NSData *nlD = [NSData dataWithBytes:"\n" length:1];
+        while ((n = recv(s, tmp, sizeof tmp, 0)) > 0) {
+            [acc appendBytes:tmp length:n];
+            while (1) {
+                NSRange nl = [acc rangeOfData:nlD options:0 range:NSMakeRange(0, acc.length)];
+                if (nl.location == NSNotFound) break;
+                NSString *ln = [[NSString alloc] initWithData:[acc subdataWithRange:NSMakeRange(0, nl.location)] encoding:NSUTF8StringEncoding];
+                [acc replaceBytesInRange:NSMakeRange(0, nl.location + 1) withBytes:NULL length:0];
+                if (ln.length) emit(ln);
+            }
+        }
+        close(s); emit(@"__CLOSED__");
+    });
+}
+
+// Simple picker list for other-device apps and AltStore search results.
+@interface BeaconListVC : UITableViewController
+@property(nonatomic, strong) NSArray<NSDictionary *> *items;
+@property(nonatomic, copy) void (^onPick)(NSDictionary *);
+@end
+@implementation BeaconListVC
+- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { return self.items.count; }
+- (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c"];
+    if (!c) c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"c"];
+    NSDictionary *it = self.items[ip.row];
+    c.textLabel.text = it[@"title"]; c.detailTextLabel.text = it[@"subtitle"];
+    c.detailTextLabel.textColor = [UIColor colorWithWhite:0.5 alpha:1];
+    c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return c;
+}
+- (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [t deselectRowAtIndexPath:ip animated:YES];
+    if (self.onPick) self.onPick(self.items[ip.row]);
+}
+- (void)done { [self dismissViewControllerAnimated:YES completion:nil]; }
+@end
+
 @interface BeaconVitals : NSObject
 @property(nonatomic, weak) UIView *overlay;
 @property(nonatomic, weak) UILabel *label;
@@ -439,8 +517,10 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
     UIView *rule = [[UIView alloc] initWithFrame:CGRectMake(24, 82, cardW - 48, 1)];
     rule.backgroundColor = [UIColor colorWithWhite:0.90 alpha:1]; [card addSubview:rule];
 
-    CGFloat btnY = cardH - 64, btnH = 48, gap = 16, btnW = (cardW - 48 - gap)/2;
-    UIScrollView *sv = [[UIScrollView alloc] initWithFrame:CGRectMake(20, 92, cardW - 40, btnY - 104)];
+    CGFloat btnH = 48, gap = 16, btnW = (cardW - 48 - gap)/2;
+    CGFloat rowUpd = cardH - 64;                 // Update / Close row
+    CGFloat rowMore = rowUpd - btnH - 12;        // "Install more apps…" row (full width)
+    UIScrollView *sv = [[UIScrollView alloc] initWithFrame:CGRectMake(20, 92, cardW - 40, rowMore - 104)];
     UILabel *lbl = [UILabel new];
     lbl.numberOfLines = 0; lbl.textColor = [UIColor colorWithWhite:0.15 alpha:1];
     lbl.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
@@ -448,12 +528,153 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
     sv.contentSize = CGSizeMake(sv.bounds.size.width, lbl.frame.size.height + 8);
     [sv addSubview:lbl]; [card addSubview:sv]; self.label = lbl;
 
+    UIButton *more = styledButton(@"Install more apps…", NO, self, @selector(installMore:));
+    more.frame = CGRectMake(24, rowMore, cardW - 48, btnH); [card addSubview:more];
     UIButton *upd = styledButton(@"Update app now", YES, self, @selector(updateNow));
-    upd.frame = CGRectMake(24, btnY, btnW, btnH); [card addSubview:upd];
+    upd.frame = CGRectMake(24, rowUpd, btnW, btnH); [card addSubview:upd];
     UIButton *cls = styledButton(@"Close", NO, self, @selector(close));
-    cls.frame = CGRectMake(24 + btnW + gap, btnY, btnW, btnH); [card addSubview:cls];
+    cls.frame = CGRectMake(24 + btnW + gap, rowUpd, btnW, btnH); [card addSubview:cls];
 
     [dim addSubview:card]; [w addSubview:dim]; self.overlay = dim;
+}
+
+// ---------- "Install more apps…" flows ----------
+- (NSString *)macIP { return g_bonjourIP.length ? g_bonjourIP : g_macIP; }
+- (UIViewController *)presenter { return [self keyWindow].rootViewController; }
+
+- (void)installMore:(UIButton *)sender {
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Install more apps"
+        message:@"Choose an app to install on this device over Wi-Fi." preferredStyle:UIAlertControllerStyleActionSheet];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Apps on your other devices" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self browseOtherDevices]; }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Search AltStore" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self searchAltStore]; }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Install from GitHub" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self githubPrompt]; }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    ac.popoverPresentationController.sourceView = sender;          // required on iPad
+    ac.popoverPresentationController.sourceRect = sender.bounds;
+    [[self presenter] presentViewController:ac animated:YES completion:nil];
+}
+
+- (NSArray<NSDictionary *> *)parseApps:(NSString *)resp {
+    if (!resp.length) return @[];
+    NSDictionary *j = [NSJSONSerialization JSONObjectWithData:[resp dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSArray *apps = [j[@"apps"] isKindOfClass:NSArray.class] ? j[@"apps"] : @[];
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSDictionary *a in apps) {
+        if (![a isKindOfClass:NSDictionary.class]) continue;
+        NSString *name = [a[@"name"] length] ? a[@"name"] : (a[@"bundle"] ?: @"App");
+        NSString *ver = [a[@"version"] length] ? [NSString stringWithFormat:@"v%@", a[@"version"]] : @"";
+        NSString *extra = [a[@"device"] length] ? a[@"device"] : ([a[@"source"] length] ? a[@"source"] : (a[@"via"] ?: @""));
+        NSString *sub = ver.length && extra.length ? [NSString stringWithFormat:@"%@ · %@", ver, extra] : (ver.length ? ver : extra);
+        NSMutableDictionary *it = [@{ @"title": name, @"subtitle": sub ?: @"", @"name": name, @"bundle": a[@"bundle"] ?: @"" } mutableCopy];
+        if (a[@"url"]) it[@"url"] = a[@"url"];
+        if (a[@"repo"]) it[@"repo"] = a[@"repo"];
+        [out addObject:it];
+    }
+    return out;
+}
+
+- (void)presentList:(NSString *)title items:(NSArray *)items empty:(NSString *)empty onPick:(void (^)(NSDictionary *))onPick {
+    if (items.count == 0) {
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:title message:empty preferredStyle:UIAlertControllerStyleAlert];
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [[self presenter] presentViewController:ac animated:YES completion:nil];
+        return;
+    }
+    BeaconListVC *vc = [BeaconListVC new]; vc.title = title; vc.items = items;
+    __weak BeaconListVC *wvc = vc;
+    vc.onPick = ^(NSDictionary *it){ [wvc dismissViewControllerAnimated:YES completion:^{ onPick(it); }]; };
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    vc.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:vc action:@selector(done)];
+    [[self presenter] presentViewController:nav animated:YES completion:nil];
+}
+
+- (void)browseOtherDevices {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *r = tcpAsk([self macIP], [NSString stringWithFormat:@"LIST udid=%@", g_udid]);
+        NSArray *apps = [self parseApps:r];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self presentList:@"On your other devices" items:apps
+                        empty:@"No apps found on your other devices — or SideStep isn’t running / reachable on Wi-Fi."
+                       onPick:^(NSDictionary *it){
+                [self runInstall:[NSString stringWithFormat:@"INSTALL udid=%@ kind=other bundle=%@", g_udid, it[@"bundle"]] title:it[@"title"]];
+            }];
+        });
+    });
+}
+
+- (void)searchAltStore {
+    UIAlertController *p = [UIAlertController alertControllerWithTitle:@"Search AltStore" message:@"Search the app catalog by name." preferredStyle:UIAlertControllerStyleAlert];
+    [p addTextFieldWithConfigurationHandler:^(UITextField *tf){ tf.placeholder = @"e.g. music, emulator, reader"; }];
+    [p addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [p addAction:[UIAlertAction actionWithTitle:@"Search" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
+        NSString *q = p.textFields.firstObject.text ?: @"";
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSString *r = tcpAsk([self macIP], [NSString stringWithFormat:@"SEARCH udid=%@ q=%@", g_udid, q]);
+            NSArray *apps = [self parseApps:r];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self presentList:[NSString stringWithFormat:@"AltStore: “%@”", q] items:apps
+                            empty:@"No matching apps — or SideStep isn’t reachable on Wi-Fi."
+                           onPick:^(NSDictionary *it){
+                    [self runInstall:[NSString stringWithFormat:@"INSTALL udid=%@ kind=source bundle=%@ url=%@ name=%@", g_udid, it[@"bundle"], it[@"url"] ?: @"", it[@"name"]] title:it[@"title"]];
+                }];
+            });
+        });
+    }]];
+    [[self presenter] presentViewController:p animated:YES completion:nil];
+}
+
+- (void)githubPrompt {
+    UIAlertController *p = [UIAlertController alertControllerWithTitle:@"Install from GitHub" message:@"Enter a repo (owner/name), or just a username to see all their apps." preferredStyle:UIAlertControllerStyleAlert];
+    [p addTextFieldWithConfigurationHandler:^(UITextField *tf){ tf.placeholder = @"owner/name  or  username"; tf.autocapitalizationType = UITextAutocapitalizationTypeNone; tf.autocorrectionType = UITextAutocorrectionTypeNo; }];
+    [p addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [p addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
+        NSString *t = [p.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        t = [[t stringByReplacingOccurrencesOfString:@"https://github.com/" withString:@""] stringByReplacingOccurrencesOfString:@"github.com/" withString:@""];
+        t = [t stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"/"]];
+        if (t.length == 0) return;
+        if ([t containsString:@"/"]) {   // full repo → install directly
+            [self runInstall:[NSString stringWithFormat:@"INSTALL udid=%@ kind=github repo=%@", g_udid, t] title:t];
+            return;
+        }
+        // bare username → list their repos that publish an .ipa, then pick one
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSString *r = tcpAsk([self macIP], [NSString stringWithFormat:@"GHUSER user=%@", t]);
+            NSArray *apps = [self parseApps:r];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self presentList:[NSString stringWithFormat:@"%@’s apps on GitHub", t] items:apps
+                            empty:@"No public repos with an .ipa release for that user — or the Mac isn’t reachable."
+                           onPick:^(NSDictionary *it){
+                    [self runInstall:[NSString stringWithFormat:@"INSTALL udid=%@ kind=github repo=%@", g_udid, it[@"repo"] ?: @""] title:it[@"title"]];
+                }];
+            });
+        });
+    }]];
+    [[self presenter] presentViewController:p animated:YES completion:nil];
+}
+
+- (void)runInstall:(NSString *)line title:(NSString *)title {
+    UIAlertController *p = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Installing %@…", title] message:@"Contacting your Mac…" preferredStyle:UIAlertControllerStyleAlert];
+    [[self presenter] presentViewController:p animated:YES completion:nil];
+    __block BOOL finished = NO;
+    tcpStream([self macIP], line, ^(NSString *ln){
+        if ([ln hasPrefix:@"STATUS "]) {
+            p.message = [ln substringFromIndex:7];
+        } else if ([ln hasPrefix:@"PROGRESS "]) {
+            int pct = -1; sscanf(ln.UTF8String, "PROGRESS %d", &pct);
+            if (pct >= 0) p.message = [NSString stringWithFormat:@"Sending to your device… %d%%", pct];
+        } else if ([ln hasPrefix:@"DONE ok"]) {
+            finished = YES; p.title = @"Installed";
+            p.message = [NSString stringWithFormat:@"%@ was installed. It will appear on your Home Screen.", title];
+            [p addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleDefault handler:nil]];
+        } else if ([ln hasPrefix:@"DONE fail"]) {
+            finished = YES; p.title = @"Couldn’t install";
+            p.message = ln.length > 10 ? [ln substringFromIndex:10] : @"Install failed.";
+            [p addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        } else if ([ln isEqualToString:@"__CLOSED__"] && !finished) {
+            finished = YES; p.message = @"The connection closed before the install finished.";
+            [p addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        }
+    });
 }
 
 static NSString *fmtEta(int s) {
