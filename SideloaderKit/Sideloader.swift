@@ -542,6 +542,26 @@ public struct Sideloader {
         return String(cString: buf)
     }
 
+    /// A user-facing name for a target device ("Ben's iPhone"), from the live device
+    /// list or the last-seen cache; "your device" if we've never learned a name. Used
+    /// in status text so we never mislabel an iPhone as an "iPad" (or vice-versa).
+    public static func deviceLabel(_ udid: String) -> String {
+        let n = connectedDevices().first(where: { $0.udid == udid })?.name
+            ?? DeviceIPCache.name(for: udid) ?? ""
+        return n.isEmpty ? "your device" : n
+    }
+
+    /// This Mac's user-visible name, as the user set it in System Settings — via
+    /// `scutil --get ComputerName` (falls back to the host name). Shown to the device
+    /// so the install popup can say which Mac signed + installed the app.
+    public static func computerName() -> String {
+        if let out = try? run("/usr/sbin/scutil", ["--get", "ComputerName"]) {
+            let s = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !s.isEmpty { return s }
+        }
+        return Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    }
+
     /// Connected iOS devices as (udid, name, conn) where conn is "usb" or "wifi".
     /// Empty if none / tooling missing.
     public static func connectedDevices() -> [(udid: String, name: String, conn: String)] {
@@ -696,12 +716,18 @@ public struct Sideloader {
 
         let teams: [ALTTeam] = try await cont { api.fetchTeams(for: account, session: session, completionHandler: $0) }
         guard let team = resolveTeam(for: account, from: teams) else { throw SideErr.fail("No teams on this Apple ID") }
-        log("Team: \(team.name). Registering iPad…")
+        // Use the device's real name in all status text (and in the portal registration)
+        // so we never say "iPad" when installing to an iPhone. Apple's device *type* is
+        // left as .iPad — the proven value that installs to iPhones and iPads alike; only
+        // the label the user reads is corrected.
+        let devLabel = deviceLabel(iPadUDID)
+        let registerName = devLabel == "your device" ? "iOS device" : devLabel
+        log("Team: \(team.name). Registering \(devLabel)…")
         // Keep the registration error — Apple returns 5405 ("maximum number of
-        // registered iPad devices") here, and we must surface it rather than sign an
+        // registered devices") here, and we must surface it rather than sign an
         // app the device isn't provisioned for and falsely report success.
         let regError: Error? = await withCheckedContinuation { (c: CheckedContinuation<Error?, Never>) in
-            api.registerDevice(name: "iPad", identifier: iPadUDID, type: .iPad, team: team, session: session) { _, err in c.resume(returning: err) }
+            api.registerDevice(name: registerName, identifier: iPadUDID, type: .iPad, team: team, session: session) { _, err in c.resume(returning: err) }
         }
 
         let cert = try await provisionCertificate(account: account, session: session, team: team, log: log)
@@ -781,7 +807,7 @@ public struct Sideloader {
                 + "(I’ve made the Developer Mode menu appear — enable it, then install again.)")
         }
 
-        log("Installing on iPad…")
+        log("Installing on \(devLabel)…")
 
         let payload = work.appendingPathComponent("Payload")
         try fm.createDirectory(at: payload, withIntermediateDirectories: true)

@@ -50,6 +50,12 @@ static int       g_beaconCount = 0;
 static NSString *g_lastReason = @"(none yet)";
 static BOOL      g_localNetStarted = NO;    // gate: local-network access (and its prompt) has begun
 static BOOL      g_lnNagShown = NO;         // Local Network refusal card already shown once
+static BOOL      g_lnReady = NO;            // Local Network access confirmed granted (probe ready)
+static BOOL      g_lnJustPrompted = NO;     // we just showed the LN system prompt → confirm on grant
+static void (^g_onLNReady)(void) = nil;     // fired once when Local Network becomes ready
+static NSString * const kLNGranted = @"ss_lnGranted";   // persisted: LN was granted on a prior run
+// Defined in the permission-flow section below; used earlier by installMore:/updateNow.
+static void ensureLocalNetReady(void (^then)(void));
 
 static void loadConfig(void) {
     NSString *p = [NSBundle.mainBundle pathForResource:@"BeaconConfig" ofType:@"plist"];
@@ -92,6 +98,17 @@ static NSString * const kAttemptWhy = @"ss_attemptWhy";
 static NSString * const kResultAt = @"ss_resultAt";
 static NSString * const kResult = @"ss_result";
 static NSString * const kResultOK = @"ss_resultOK";
+// Who last serviced this app: the Mac's name and the signing Apple ID. Sent by the
+// Mac (HOST / SIGNER lines) and shown in the diagnostics + install popups.
+static NSString * const kHost = @"ss_host";
+static NSString * const kSigner = @"ss_signer";
+static void recordHost(NSString *host) {
+    NSString *h = [host stringByReplacingOccurrencesOfString:@"_" withString:@" "];
+    [NSUserDefaults.standardUserDefaults setObject:(h ?: @"") forKey:kHost];
+}
+static void recordSigner(NSString *signer) {
+    [NSUserDefaults.standardUserDefaults setObject:(signer ?: @"") forKey:kSigner];
+}
 static void recordAttempt(NSString *why) {
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     [d setObject:[NSDate date] forKey:kAttemptAt];
@@ -176,6 +193,12 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
                 int pct = -1, eta = -1; sscanf(buf + 9, "%d %d", &pct, &eta);
                 if (pct >= 100) recordResult(@"Update delivered (100%).", YES);
                 dispatch_async(dispatch_get_main_queue(), ^{ onProgress(pct, eta); });
+            } else if (strncmp(buf, "HOST ", 5) == 0) {
+                sawAny = YES;
+                recordHost([[NSString stringWithUTF8String:buf + 5] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
+            } else if (strncmp(buf, "SIGNER ", 7) == 0) {
+                sawAny = YES;
+                recordSigner([[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
             }
         } else if (!sawAny && -start.timeIntervalSinceNow > 12) {
             if (!noReplyRecorded) { recordResult(@"No reply — is SideStep running on your Mac?", NO); noReplyRecorded = YES; }
@@ -321,9 +344,14 @@ static NSString *vitalsText(void) {
     NSString *resStr = rAt
         ? [NSString stringWithFormat:@"%@  (%@)\n            %@", [ud boolForKey:kResultOK] ? @"✓ OK" : @"✗ FAILED", fmtAgo(rAt), [ud stringForKey:kResult] ?: @"?"]
         : @"(no attempt has reported back yet)";
+    NSString *host = [ud stringForKey:kHost], *signer = [ud stringForKey:kSigner];
+    NSString *byStr = host.length
+        ? [NSString stringWithFormat:@"%@%@", host, signer.length ? [NSString stringWithFormat:@"  ·  signed by %@", signer] : @""]
+        : @"(no install has reported back yet)";
     return [NSString stringWithFormat:
         @"APP\n  %@  v%@ (%@)\n  %@\n\n"
         @"SOURCE\n  found via: %@\n  %@\n\n"
+        @"INSTALLED BY\n  %@\n\n"
         @"SIGNING PROFILE\n  team:     %@\n  profile:  %@\n  devices:  %d provisioned\n"
         @"  updated:  %@  (%@)\n  expires:  %@\n  in:       %.1f days\n\n"
         @"UPDATER\n  interval: %d s\n  status:   %@\n  last chk: %@\n  beacons:  %d sent, last %@\n"
@@ -332,6 +360,7 @@ static NSString *vitalsText(void) {
         info[@"CFBundleDisplayName"] ?: @"?", info[@"CFBundleShortVersionString"] ?: @"?", info[@"CFBundleVersion"] ?: @"?",
         info[@"CFBundleIdentifier"] ?: @"?",
         g_foundVia.length ? g_foundVia : @"(unknown)", g_autoUpdates ? @"(app keeps up to date)" : @"(one-time install)",
+        byStr,
         prof[@"TeamName"] ?: @"?", prof[@"Name"] ?: @"?", (int)[prof[@"ProvisionedDevices"] count],
         fmtDate(created), fmtAgo(created), fmtDate(expires), expS/86400.0,
         g_updateSec, stale ? @"STALE → will beacon" : @"fresh", g_lastReason,
@@ -543,15 +572,20 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
 - (UIViewController *)presenter { return [self keyWindow].rootViewController; }
 
 - (void)installMore:(UIButton *)sender {
-    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Install more apps"
-        message:@"Choose an app to install on this device over Wi-Fi." preferredStyle:UIAlertControllerStyleActionSheet];
-    [ac addAction:[UIAlertAction actionWithTitle:@"Apps on your other devices" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self browseOtherDevices]; }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"Search AltStore" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self searchAltStore]; }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"Install from GitHub" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self githubPrompt]; }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    ac.popoverPresentationController.sourceView = sender;          // required on iPad
-    ac.popoverPresentationController.sourceRect = sender.bounds;
-    [[self presenter] presentViewController:ac animated:YES completion:nil];
+    // Every option here reaches the Mac over Wi-Fi, so confirm Local Network access
+    // first (explain → Next → grant on a first run) rather than letting the first
+    // request silently fail. When already granted this runs through immediately.
+    ensureLocalNetReady(^{
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"Install more apps"
+            message:@"Choose an app to install on this device over Wi-Fi." preferredStyle:UIAlertControllerStyleActionSheet];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Apps on your other devices" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self browseOtherDevices]; }]];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Search AltStore" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self searchAltStore]; }]];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Install from GitHub" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){ [self githubPrompt]; }]];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        ac.popoverPresentationController.sourceView = sender;          // required on iPad
+        ac.popoverPresentationController.sourceRect = sender.bounds;
+        [[self presenter] presentViewController:ac animated:YES completion:nil];
+    });
 }
 
 - (NSArray<NSDictionary *> *)parseApps:(NSString *)resp {
@@ -571,6 +605,15 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
         [out addObject:it];
     }
     return out;
+}
+
+// A server-supplied explanatory note (e.g. GitHub rate-limit + how to add a token
+// on the Mac), or nil. Shown in place of the generic "nothing found" message.
+- (NSString *)parseNote:(NSString *)resp {
+    if (!resp.length) return nil;
+    NSDictionary *j = [NSJSONSerialization JSONObjectWithData:[resp dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSString *note = [j isKindOfClass:NSDictionary.class] ? j[@"note"] : nil;
+    return [note isKindOfClass:NSString.class] && note.length ? note : nil;
 }
 
 - (void)presentList:(NSString *)title items:(NSArray *)items empty:(NSString *)empty onPick:(void (^)(NSDictionary *))onPick {
@@ -640,9 +683,10 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSString *r = tcpAsk([self macIP], [NSString stringWithFormat:@"GHUSER user=%@", t]);
             NSArray *apps = [self parseApps:r];
+            NSString *note = [self parseNote:r];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self presentList:[NSString stringWithFormat:@"%@’s apps on GitHub", t] items:apps
-                            empty:@"No public repos with an .ipa release for that user — or the Mac isn’t reachable."
+                            empty:note ?: @"No public repos with an .ipa release for that user — or the Mac isn’t reachable."
                            onPick:^(NSDictionary *it){
                     [self runInstall:[NSString stringWithFormat:@"INSTALL udid=%@ kind=github repo=%@", g_udid, it[@"repo"] ?: @""] title:it[@"title"]];
                 }];
@@ -656,15 +700,24 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
     UIAlertController *p = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Installing %@…", title] message:@"Contacting your Mac…" preferredStyle:UIAlertControllerStyleAlert];
     [[self presenter] presentViewController:p animated:YES completion:nil];
     __block BOOL finished = NO;
+    __block NSString *host = nil, *signer = nil;
     tcpStream([self macIP], line, ^(NSString *ln){
         if ([ln hasPrefix:@"STATUS "]) {
             p.message = [ln substringFromIndex:7];
         } else if ([ln hasPrefix:@"PROGRESS "]) {
             int pct = -1; sscanf(ln.UTF8String, "PROGRESS %d", &pct);
             if (pct >= 0) p.message = [NSString stringWithFormat:@"Sending to your device… %d%%", pct];
+        } else if ([ln hasPrefix:@"HOST "]) {
+            host = [[ln substringFromIndex:5] stringByReplacingOccurrencesOfString:@"_" withString:@" "];
+            recordHost(host);
+        } else if ([ln hasPrefix:@"SIGNER "]) {
+            signer = [ln substringFromIndex:7]; recordSigner(signer);
         } else if ([ln hasPrefix:@"DONE ok"]) {
             finished = YES; p.title = @"Installed";
-            p.message = [NSString stringWithFormat:@"%@ was installed. It will appear on your Home Screen.", title];
+            NSString *by = @"";
+            if (host.length && signer.length) by = [NSString stringWithFormat:@"\n\nInstalled by %@, signed with %@.", host, signer];
+            else if (host.length)   by = [NSString stringWithFormat:@"\n\nInstalled by %@.", host];
+            p.message = [NSString stringWithFormat:@"%@ was installed. It will appear on your Home Screen.%@", title, by];
             [p addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleDefault handler:nil]];
         } else if ([ln hasPrefix:@"DONE fail"]) {
             finished = YES; p.title = @"Couldn’t install";
@@ -687,6 +740,10 @@ static NSString *fmtEta(int s) {
 // self-restart at the end (iOS defers replacing a running app, so we exit to
 // let the swap finish, then the user reopens the new version).
 - (void)updateNow {
+    // The update talks to the Mac over Wi-Fi — confirm Local Network access first
+    // (explain → Next → grant on a first run) so tapping "Update app now" can't fail
+    // on a permission that isn't granted yet. When already granted, runs immediately.
+    if (!g_lnReady) { ensureLocalNetReady(^{ [self updateNow]; }); return; }
     UIWindow *w = [self keyWindow]; if (!w) return;
     self.exiting = NO;
     CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
@@ -824,6 +881,76 @@ static void showPermissionNag(NSString *permName, NSString *detail,
     [dim addSubview:card]; [w addSubview:dim];
 }
 
+// A pre-permission explainer: says WHY the permission is needed, with a single
+// "Next" button that (on tap) triggers the real iOS system prompt via `onNext`.
+// This is the "explain → NEXT → grant" step the beacon installer was missing — so
+// the first network action no longer races an un-granted permission and fails.
+static void showPermissionExplain(NSString *permName, NSString *detail, void (^onNext)(void)) {
+    UIWindow *w = beaconKeyWindow(); if (!w) { if (onNext) onNext(); return; }
+    for (UIView *sub in w.subviews) if (sub.tag == 0x5EED0001) return;   // only one at a time
+
+    CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
+    UIView *dim = [[UIView alloc] initWithFrame:w.bounds];
+    dim.tag = 0x5EED0001;
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+    CGFloat pad = 24, cardW = MIN(460, W - 48), contentW = cardW - pad * 2;
+    UIFont *bodyFont = [UIFont systemFontOfSize:15];
+    CGRect br = [detail boundingRectWithSize:CGSizeMake(contentW, 1000)
+                    options:NSStringDrawingUsesLineFragmentOrigin
+                    attributes:@{NSFontAttributeName: bodyFont} context:nil];
+    CGFloat bodyH = ceil(br.size.height), btnH = 48;
+    CGFloat cardH = pad + 28 + 12 + bodyH + 22 + btnH + pad;
+
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, (H - cardH)/2, cardW, cardH)];
+    card.backgroundColor = UIColor.whiteColor; card.layer.cornerRadius = 20;
+    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.3; card.layer.shadowRadius = 28;
+    card.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin |
+                            UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, pad, contentW, 28)];
+    title.text = [NSString stringWithFormat:@"%@ access is needed", permName];
+    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+    title.textColor = [UIColor colorWithWhite:0.1 alpha:1];
+    [card addSubview:title];
+
+    UILabel *body = [[UILabel alloc] initWithFrame:CGRectMake(pad, pad + 28 + 12, contentW, bodyH)];
+    body.text = detail; body.font = bodyFont; body.numberOfLines = 0;
+    body.textColor = [UIColor colorWithWhite:0.3 alpha:1];
+    [card addSubview:body];
+
+    CGFloat btnY = cardH - pad - btnH;
+    UIButton *next = nagButton(@"Next", YES, ^{ [dim removeFromSuperview]; if (onNext) onNext(); });
+    next.frame = CGRectMake(pad, btnY, contentW, btnH); [card addSubview:next];
+
+    [dim addSubview:card]; [w addSubview:dim];
+}
+
+// A brief auto-dismissing confirmation shown right after a permission is granted —
+// the "page refreshes to PERMISSION GRANTED" acknowledgement.
+static void showGrantedToast(NSString *permName) {
+    UIWindow *w = beaconKeyWindow(); if (!w) return;
+    for (UIView *sub in w.subviews) if (sub.tag == 0x5EED0002) return;
+    CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
+    CGFloat cardW = MIN(360, W - 64), cardH = 108;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, (H - cardH)/2, cardW, cardH)];
+    card.tag = 0x5EED0002;
+    card.backgroundColor = UIColor.whiteColor; card.layer.cornerRadius = 18;
+    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.28; card.layer.shadowRadius = 24;
+    card.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin |
+                            UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, cardW - 32, cardH)];
+    l.numberOfLines = 2; l.textAlignment = NSTextAlignmentCenter;
+    l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    l.textColor = [UIColor colorWithRed:0.13 green:0.55 blue:0.24 alpha:1];
+    l.text = [NSString stringWithFormat:@"✓ %@ access granted", permName];
+    [card addSubview:l]; [w addSubview:card];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [UIView animateWithDuration:0.25 animations:^{ card.alpha = 0; } completion:^(BOOL f){ [card removeFromSuperview]; }];
+    });
+}
+
 // A tiny NWBrowser used ONLY to learn whether Local Network access was DENIED
 // (a policy refusal, distinct from Wi-Fi merely being off) so we can nag.
 // Discovery itself still runs through BeaconBonjour.
@@ -835,7 +962,16 @@ static void startLocalNetworkProbe(void) {
         g_lnProbe = nw_browser_create(desc, params);
         nw_browser_set_queue(g_lnProbe, dispatch_get_main_queue());
         nw_browser_set_state_changed_handler(g_lnProbe, ^(nw_browser_state_t state, nw_error_t error) {
-            if (state == nw_browser_state_ready) return;              // access allowed
+            if (state == nw_browser_state_ready) {                    // access allowed
+                if (!g_lnReady) {
+                    g_lnReady = YES;
+                    [NSUserDefaults.standardUserDefaults setBool:YES forKey:kLNGranted];
+                    if (g_lnJustPrompted) { g_lnJustPrompted = NO; showGrantedToast(@"Local Network"); }
+                    void (^cb)(void) = g_onLNReady; g_onLNReady = nil;
+                    if (cb) dispatch_async(dispatch_get_main_queue(), cb);   // e.g. fire the first beacon
+                }
+                return;
+            }
             if (state == nw_browser_state_waiting && error) {
                 nw_error_domain_t dom = nw_error_get_error_domain(error);
                 int code = nw_error_get_error_code(error);
@@ -855,43 +991,72 @@ static void startLocalNetworkProbe(void) {
     }
 }
 
-// The SECOND prompt: begin all local-network activity (Bonjour discovery, the
-// refusal probe, and the first beacon). Guarded so it runs exactly once.
-static void startLocalNetwork(void) {
+// Begin local-network activity (Bonjour discovery + the refusal/readiness probe).
+// Deliberately does NOT beacon — the first beacon is fired only once the probe
+// confirms Local Network access is granted (see ensureLocalNetReady), so we never
+// race an un-granted permission and fail the way the beacon installer used to.
+static void startLocalNetworkActivity(void) {
     if (g_localNetStarted) return;
     g_localNetStarted = YES;
     g_bonjour = [BeaconBonjour new]; [g_bonjour start];   // discovery (triggers the Local Network prompt)
-    startLocalNetworkProbe();                             // detect a Local Network refusal → nag
-    maybeUpdate("launch");                                // first beacon
+    startLocalNetworkProbe();                             // detect grant (ready) or refusal (nag)
 }
 
-// The FIRST prompt: notifications. Only once that's resolved do we trigger Local
-// Network — "delay the 2nd one until you get the 1st". A refusal shows the nag
-// but still proceeds to Local Network (notifications aren't required to update).
+// Guarantee Local Network access before running a network action (`then`). If it's
+// already granted, run immediately. If granted on a previous run, start quietly and
+// run once ready (with a short fallback so a slow probe never hangs the action). On
+// a first run, show the explainer → Next → system prompt → run on grant. On refusal,
+// the probe shows the nag and `then` is not run (we prompt instead of silently failing).
+static void ensureLocalNetReady(void (^then)(void)) {
+    if (g_lnReady) { if (then) then(); return; }
+    void (^prev)(void) = g_onLNReady;
+    g_onLNReady = ^{ if (prev) prev(); if (then) then(); };   // chain, so multiple waiters all run
+    if (g_localNetStarted) return;                            // activity already running; wait for ready
+
+    if ([NSUserDefaults.standardUserDefaults boolForKey:kLNGranted]) {
+        // Granted before — start quietly; don't let a slow probe strand the action.
+        startLocalNetworkActivity();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!g_lnReady) { g_lnReady = YES; void (^cb)(void) = g_onLNReady; g_onLNReady = nil; if (cb) cb(); }
+        });
+    } else {
+        // First run — explain, then Next triggers the real iOS Local Network prompt.
+        showPermissionExplain(@"Local Network",
+            @"SideStep finds your Mac on your Wi-Fi to install and update apps. "
+            @"Next, iOS will ask to allow “Local Network” access — please tap Allow.",
+            ^{ g_lnJustPrompted = YES; startLocalNetworkActivity(); });
+    }
+}
+
+// Launch-time permission flow. FIRST notifications (explain → Next → prompt), THEN
+// hand off to the Local Network gate, which fires the first beacon once LN is ready.
 static void requestNotificationsThenLocalNet(void) {
+    void (^gotoLocalNet)(void) = ^{ ensureLocalNetReady(^{ maybeUpdate("launch"); }); };
     UNUserNotificationCenter *c = UNUserNotificationCenter.currentNotificationCenter;
-    NSString *detail = @"SideStep sends a reminder to reopen this app before its 7-day signing "
+    NSString *detail = @"SideStep sends a reminder to reopen this app before its signing "
                        @"expires. Without notifications, it can quietly stop working.";
     [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *s) {
         UNAuthorizationStatus st = s.authorizationStatus;
         if (st == UNAuthorizationStatusNotDetermined) {
-            [c requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
-                completionHandler:^(BOOL granted, NSError *e) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        if (granted) startLocalNetwork();
-                        else showPermissionNag(@"Notifications", detail,
-                                 ^{ openAppSettings(); startLocalNetwork(); },
-                                 ^{ startLocalNetwork(); });
-                    });
-                }];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showPermissionExplain(@"Notifications", detail, ^{
+                    [c requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+                        completionHandler:^(BOOL granted, NSError *e) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                if (granted) showGrantedToast(@"Notifications");
+                                gotoLocalNet();   // proceed either way — notifications aren't required
+                            });
+                        }];
+                });
+            });
         } else if (st == UNAuthorizationStatusDenied) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 showPermissionNag(@"Notifications", detail,
-                    ^{ openAppSettings(); startLocalNetwork(); },
-                    ^{ startLocalNetwork(); });
+                    ^{ openAppSettings(); gotoLocalNet(); },
+                    ^{ gotoLocalNet(); });
             });
         } else {   // authorized / provisional / ephemeral
-            dispatch_async(dispatch_get_main_queue(), ^{ startLocalNetwork(); });
+            dispatch_async(dispatch_get_main_queue(), gotoLocalNet);
         }
     }];
 }
@@ -926,8 +1091,8 @@ static void onLaunch(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ requestNotificationsThenLocalNet(); });
     [NSTimer scheduledTimerWithTimeInterval:g_fgSec repeats:YES block:^(NSTimer *t) {
-        if (g_localNetStarted && UIApplication.sharedApplication.applicationState == UIApplicationStateActive)
-            maybeUpdate("foreground-timer");
+        if (g_lnReady && UIApplication.sharedApplication.applicationState == UIApplicationStateActive)
+            maybeUpdate("foreground-timer");   // only once Local Network is confirmed granted
     }];
 }
 
@@ -938,7 +1103,7 @@ static void beacon_init(void) {
         object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { onLaunch(); }];
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
         object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
-            if (g_localNetStarted) maybeUpdate("became-active");   // don't beacon before the perm flow runs
+            if (g_lnReady) maybeUpdate("became-active");   // only beacon once Local Network is granted
             [BeaconVitals.shared attach];
         }];
 }

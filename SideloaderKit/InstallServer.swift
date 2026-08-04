@@ -150,6 +150,12 @@ public final class InstallServer: NSObject {
             let short = h.repo.split(separator: "/").last.map(String.init) ?? h.repo
             return ["name": short, "repo": h.repo, "version": h.ipa?.tag ?? "", "source": h.description]
         }
+        // If nothing came back because GitHub's unauthenticated limit is spent and no
+        // token is saved, tell the device so — the token is added on the Mac, so the
+        // device just points the user there rather than showing a bare "none found".
+        if out.isEmpty, !GitHub.hasToken, let rem = await GitHub.coreRemaining(), rem < 3 {
+            return json(["apps": out, "note": "GitHub's hourly limit is used up. On your Mac, open SideStep ▸ Settings ▸ “Add a GitHub token” to raise it, then try again."])
+        }
         return json(["apps": out])
     }
 
@@ -213,6 +219,9 @@ public final class InstallServer: NSObject {
             do {
                 _ = try await action(acc, ses)
                 send(c, "PROGRESS 100 0")
+                // Identify the Mac + signing Apple ID so the device popup can show them.
+                send(c, "HOST \(Sideloader.computerName())")
+                send(c, "SIGNER \(aid)")
                 send(c, "DONE ok")
                 return
             } catch let e as SideErr {

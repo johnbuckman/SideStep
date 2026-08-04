@@ -148,6 +148,14 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     // install
     @Published var installing = false
     @Published var status = ""
+    // Install progress/result window — so that once an install starts, the user sees a
+    // live progress window that ends with the outcome + an OK button, and never has to
+    // reopen SideStep to find out what happened.
+    @Published var ipTitle = ""            // "Installing X on <device>"
+    @Published var ipStatus = ""           // live status line
+    @Published var ipDone = false          // terminal state reached
+    @Published var ipOK = false            // terminal outcome (success/failure)
+    @Published var ipResult = ""           // final message shown alongside the OK button
     @Published var launchAtLogin = (SMAppService.mainApp.status == .enabled)
     @Published var sourceURL = ""
     @Published var sourceApps: [SourceApp] = []
@@ -170,6 +178,10 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var githubResults: [GitHub.RepoHit] = []
     @Published var githubSearching = false
     @Published var githubSearchNote = "No results yet."
+    // Set when a search failed because GitHub's unauthenticated rate limit is spent
+    // AND no token is saved — the view then offers to add a personal-access token.
+    @Published var githubOfferToken = false
+    @Published var githubHasToken = GitHub.hasToken
 
     // AltStore catalog search
     @Published var altStoreQuery = ""
@@ -439,6 +451,29 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     }
     func closeGitHubSearch() { githubWindow?.close(); githubWindow = nil }
 
+    // MARK: install progress/result window
+    private var installProgressWindow: NSWindow?
+    /// Open (or reuse) the install-progress window and reset it to a running state.
+    func beginInstallProgress(title: String) {
+        ipTitle = title; ipStatus = "Starting…"; ipDone = false; ipOK = false; ipResult = ""
+        if let w = installProgressWindow { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        let host = NSHostingView(rootView: InstallProgressView(m: self))
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 200),
+                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        w.title = "Installing"
+        w.contentView = host; w.setContentSize(host.fittingSize); w.center(); w.isReleasedWhenClosed = false
+        w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        installProgressWindow = w
+    }
+    /// Mark the install finished with an outcome; the window shows it + an OK button.
+    func finishInstallProgress(ok: Bool, message: String) {
+        ipDone = true; ipOK = ok; ipResult = message
+        ipStatus = ok ? "Done." : "Failed."
+        NSApp.activate(ignoringOtherApps: true)
+        installProgressWindow?.makeKeyAndOrderFront(nil)
+    }
+    func closeInstallProgress() { installProgressWindow?.close(); installProgressWindow = nil }
+
     func chooseDevice(_ udid: String) {
         // If Developer Mode is off on the chosen (USB) device, guide instead of failing.
         if let d = deviceOptions.first(where: { $0.udid == udid }), d.devMode == .disabled {
@@ -475,11 +510,21 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             return
         }
         installing = true; status = "Installing…"
+        // Show the live progress/result window so the outcome is always visible without
+        // reopening SideStep. Name the actual target device (never a hardcoded "iPad").
+        let deviceName = deviceOptions.first(where: { $0.udid == udid })?.name ?? ""
+        beginInstallProgress(title: installAppName.isEmpty
+            ? (deviceName.isEmpty ? "Installing…" : "Installing on \(deviceName)")
+            : "Installing “\(installAppName)”\(deviceName.isEmpty ? "" : " on \(deviceName)")")
         let gh = pendingGithub; pendingGithub = nil   // remember the GitHub source for this install only
         dlog("execute: starting install task for \(account.appleID)\(gh.map { " (github \($0.repo) \($0.tag))" } ?? "")")
         Task.detached { [weak self] in
             guard let self else { return }
-            let log: @Sendable (String) -> Void = { msg in print("[SideStep] \(msg)"); Task { @MainActor in self.status = String(msg.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
+            let log: @Sendable (String) -> Void = { msg in
+                print("[SideStep] \(msg)")
+                let line = String(msg.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "")
+                Task { @MainActor in self.status = line; if !line.isEmpty { self.ipStatus = line } }
+            }
             // Shown only when an app to be installed looks like a known PAID App Store
             // app — a legitimate owner can proceed; the default (Cancel) refuses.
             let confirm: @Sendable (String, String) async -> Bool = { app, bid in
@@ -501,14 +546,16 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                 case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, confirm: confirm, log: log)
                 }
                 dlog("execute: install SUCCEEDED — \(result)")
-                await MainActor.run { self.status = result; self.maybeShowTrustHint(appleID: account.appleID) }
+                await MainActor.run { self.status = result; self.finishInstallProgress(ok: true, message: result); self.maybeShowTrustHint(appleID: account.appleID) }
             } catch {
                 dlog("execute: INSTALL FAILED — \(String(reflecting: error))")
                 if case SideErr.deviceLimit(let aid, let devName, let bid, let others) = error {
-                    await MainActor.run { self.installing = false; self.presentDeviceLimitRetry(appleID: aid, deviceName: devName, bundleID: bid, others: others, udid: udid) }
+                    // The device-limit retry dialog supersedes the progress window — close it
+                    // so the two don't stack; the retry path reopens progress on its next try.
+                    await MainActor.run { self.installing = false; self.closeInstallProgress(); self.presentDeviceLimitRetry(appleID: aid, deviceName: devName, bundleID: bid, others: others, udid: udid) }
                     return
                 }
-                await MainActor.run { self.status = "Failed: \(error.localizedDescription)" }
+                await MainActor.run { self.status = "Failed: \(error.localizedDescription)"; self.finishInstallProgress(ok: false, message: "Failed: \(error.localizedDescription)") }
             }
             await MainActor.run { self.tracked = Tracked.all(); self.installing = false }
         }
@@ -620,7 +667,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     func searchGitHub() {
         let q = githubQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
-        githubSearching = true; githubResults = []; githubSearchNote = "Searching…"
+        githubSearching = true; githubResults = []; githubSearchNote = "Searching…"; githubOfferToken = false
         Task { @MainActor in
             let hits = await GitHub.searchReposWithIPA(q)
             self.githubResults = hits
@@ -630,9 +677,67 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             // (each search probes ~20 repos; unauthenticated GitHub allows only 60/hr).
             let remaining = await GitHub.coreRemaining()
             if let r = remaining, r < 3 {
-                self.githubSearchNote = "GitHub's hourly request limit is used up (only 60/hour without a sign-in, and each search checks up to 20 repos). Wait a while and try again — or if you know the app's repo, use “Install from GitHub” by owner/name, which doesn't hit this limit."
+                if GitHub.hasToken {
+                    self.githubSearchNote = "GitHub's hourly request limit is used up even with your saved token (5000/hour). That's unusual — wait a few minutes and try again, or use “Install from GitHub” by owner/name."
+                } else {
+                    self.githubSearchNote = "GitHub's hourly request limit is used up (only 60/hour without a sign-in, and each search checks up to 20 repos). Add a free GitHub token to raise this to 5000/hour, or wait a while — or if you know the app's repo, use “Install from GitHub” by owner/name, which barely uses the limit."
+                    self.githubOfferToken = true
+                }
             } else {
                 self.githubSearchNote = "No repositories with an .ipa release matched “\(q)”. (GitHub can't search release files, so this only matches repo names/descriptions — “Install from GitHub” by owner/name is more reliable.)"
+            }
+        }
+    }
+
+    /// Ask for a GitHub personal-access token and save it to the Keychain. Offers a
+    /// button that opens the token-creation page, verifies the token before saving,
+    /// and (on success) re-runs the last search so the user sees results immediately.
+    func promptGitHubToken(rerunQuery: String? = nil) {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = GitHub.hasToken ? "Update your GitHub token" : "Add a GitHub token"
+        a.informativeText = "A GitHub personal-access token raises the search limit from 60 to 5000 requests/hour. A read-only token with no extra scopes is enough (public-repo read).\n\nClick “Create a token…” to open GitHub, generate one, then paste it here."
+        // Plain (not secure) + wide: a github_pat_ token is ~90 chars, so the field
+        // must be roomy enough to show the whole paste — a narrow secure field showed
+        // only a few dots and looked like the paste had failed.
+        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 620, height: 24))
+        tf.placeholderString = "ghp_…  or  github_pat_…  (paste the full token)"
+        tf.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        tf.lineBreakMode = .byTruncatingTail
+        a.accessoryView = tf
+        a.addButton(withTitle: "Save")            // .alertFirstButtonReturn
+        a.addButton(withTitle: "Create a token…") // .alertSecondButtonReturn
+        a.addButton(withTitle: "Cancel")
+        if GitHub.hasToken { a.addButton(withTitle: "Remove saved token") }
+        a.window.initialFirstResponder = tf
+        let resp = a.runModal()
+        switch resp {
+        case .alertSecondButtonReturn:
+            if let u = URL(string: GitHub.createTokenURL) { NSWorkspace.shared.open(u) }
+            // Re-open the entry sheet so they can paste after creating the token.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.promptGitHubToken(rerunQuery: rerunQuery) }
+        case .alertThirdButtonReturn:
+            return   // Cancel
+        case NSApplication.ModalResponse(rawValue: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue + 1):
+            GitHub.clearToken(); githubHasToken = false; status = "Removed the saved GitHub token."
+        default:   // Save
+            let entered = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !entered.isEmpty else { return }
+            status = "Verifying GitHub token…"
+            Task { @MainActor in
+                if let login = await GitHub.verifyToken(entered) {
+                    GitHub.saveToken(entered)
+                    self.githubHasToken = true; self.githubOfferToken = false
+                    self.status = "Saved GitHub token for \(login)."
+                    if let q = rerunQuery, !q.isEmpty { self.githubQuery = q; self.searchGitHub() }
+                } else {
+                    self.status = "That GitHub token didn't work — check you copied it fully and it isn't expired."
+                    let retry = NSAlert()
+                    retry.messageText = "Token not accepted"
+                    retry.informativeText = "GitHub rejected that token. It may be mistyped, expired, or lack read access. Try again?"
+                    retry.addButton(withTitle: "Try again"); retry.addButton(withTitle: "Cancel")
+                    if retry.runModal() == .alertFirstButtonReturn { self.promptGitHubToken(rerunQuery: rerunQuery) }
+                }
             }
         }
     }
@@ -640,16 +745,23 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     /// Bare-username install: show that user's repos that publish an .ipa, in the
     /// GitHub results window, so the user can pick which to install.
     func installFromGitHubUser(_ user: String) {
-        githubSearching = true; githubResults = []; githubSearchNote = "Finding \(user)'s apps on GitHub…"
+        githubSearching = true; githubResults = []; githubSearchNote = "Finding \(user)'s apps on GitHub…"; githubOfferToken = false
         showGitHubSearchWindow()
         Task { @MainActor in
             let hits = await GitHub.userReposWithIPA(user)
             self.githubResults = hits; self.githubSearching = false
             if !hits.isEmpty { self.githubSearchNote = "" ; return }
             let remaining = await GitHub.coreRemaining()
-            self.githubSearchNote = (remaining ?? 99) < 3
-                ? "GitHub's hourly request limit is used up (60/hour without a sign-in). Wait a while and try again."
-                : "No public repositories with an .ipa release were found for “\(user)”."
+            if (remaining ?? 99) < 3 {
+                if GitHub.hasToken {
+                    self.githubSearchNote = "GitHub's hourly limit is used up even with your saved token — wait a few minutes and try again."
+                } else {
+                    self.githubSearchNote = "GitHub's hourly request limit is used up (60/hour without a sign-in). Add a free GitHub token to raise it to 5000/hour, or wait a while and try again."
+                    self.githubOfferToken = true
+                }
+            } else {
+                self.githubSearchNote = "No public repositories with an .ipa release were found for “\(user)”."
+            }
         }
     }
 
@@ -1072,6 +1184,7 @@ struct ContentView: View {
                     Button("Refresh all apps now") { m.refreshAllNow() }.disabled(m.installing)
                     Button("Check GitHub apps for updates now") { m.checkGitHubUpdatesNow() }.disabled(m.installing)
                     Button("Check for SideStep Update now") { Task { await UpdateChecker.shared.check(userInitiated: true) } }
+                    Button(m.githubHasToken ? "GitHub token (saved) — change…" : "Add a GitHub token (faster search)…") { m.promptGitHubToken() }
                     Button("Show Debug Log…") { DebugWindow.show() }
                     Text("SideStep keeps apps signed while it runs in the menu bar — it re-signs automatically when you plug in a device and every couple of hours. No separate background program is needed.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1189,6 +1302,37 @@ struct AltStoreSearchView: View {
     }
 }
 
+/// Live install progress + final outcome, shown in its own window so the result is
+/// always visible without reopening SideStep.
+struct InstallProgressView: View {
+    @ObservedObject var m: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(m.ipTitle).font(.headline).fixedSize(horizontal: false, vertical: true)
+            if m.ipDone {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: m.ipOK ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                        .foregroundStyle(m.ipOK ? .green : .red).font(.title2)
+                    Text(m.ipResult.isEmpty ? (m.ipOK ? "Installed." : "Install failed.") : m.ipResult)
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    ProgressView().scaleEffect(0.7).frame(width: 16, height: 16)
+                    Text(m.ipStatus).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            HStack {
+                Spacer()
+                Button(m.ipDone ? "OK" : "Hide") { m.closeInstallProgress() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20).frame(width: 440, alignment: .leading)
+    }
+}
+
 struct GitHubSearchView: View {
     @ObservedObject var m: AppModel
     var body: some View {
@@ -1208,6 +1352,10 @@ struct GitHubSearchView: View {
                     if m.githubResults.isEmpty {
                         Text(m.githubSearchNote).font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if m.githubOfferToken {
+                            Button("Add a GitHub token…") { m.promptGitHubToken(rerunQuery: m.githubQuery) }
+                                .padding(.top, 4)
+                        }
                     }
                     ForEach(m.githubResults) { hit in
                         HStack(alignment: .top) {

@@ -2,11 +2,62 @@
 // repo's releases, keep it updated (the tracked app remembers its repo + tag), and
 // search GitHub for repos that ship an installable `.ipa`.
 //
-// Uses the public, unauthenticated GitHub API (no token): 60 core req/hr and
-// 10 search req/min per IP — fine for occasional installs + a daily update sweep.
+// Uses the public GitHub API. Unauthenticated it's 60 core req/hr + 10 search
+// req/min per IP — fine for occasional installs, but a wide search (which probes
+// ~20 repos) can exhaust it. If the user has saved a personal-access token (stored
+// in the Keychain), we send it as a Bearer token and the ceiling jumps to 5000/hr.
 import Foundation
+import Security
 
 public enum GitHub {
+    // MARK: - Personal-access token (Keychain-backed, optional)
+    // A GitHub PAT lifts the rate limit from 60→5000 req/hr. Stored the same way as
+    // the Apple-ID password so it survives launches and never sits in UserDefaults.
+    private static let tokenService = "com.decent.sidestep.github"
+    private static let tokenAccount = "pat"
+
+    /// The URL where a user creates a token (fine-grained; public-repo read is enough).
+    public static let createTokenURL = "https://github.com/settings/tokens?type=beta"
+
+    public static func token() -> String? {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                kSecAttrService as String: tokenService,
+                                kSecAttrAccount as String: tokenAccount,
+                                kSecReturnData as String: true,
+                                kSecMatchLimit as String: kSecMatchLimitOne]
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+              let d = out as? Data, let s = String(data: d, encoding: .utf8),
+              !s.isEmpty else { return nil }
+        return s
+    }
+    public static var hasToken: Bool { token() != nil }
+    public static func saveToken(_ t: String) {
+        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: tokenService,
+                                    kSecAttrAccount as String: tokenAccount]
+        SecItemDelete(base as CFDictionary)
+        guard !trimmed.isEmpty else { return }   // empty = clear
+        var add = base; add[kSecValueData as String] = trimmed.data(using: .utf8)!
+        SecItemAdd(add as CFDictionary, nil)
+    }
+    public static func clearToken() { saveToken("") }
+
+    /// Verify a token by calling /user; returns the login on success, nil if rejected.
+    public static func verifyToken(_ t: String) async -> String? {
+        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let u = URL(string: "https://api.github.com/user") else { return nil }
+        var req = URLRequest(url: u)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("SideStep", forHTTPHeaderField: "User-Agent")
+        req.setValue("Bearer \(trimmed)", forHTTPHeaderField: "Authorization")
+        guard let (d, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+        return obj["login"] as? String
+    }
+
     /// A repo's newest release that carries an `.ipa` asset.
     public struct IPARelease: Sendable {
         public let repo: String      // "owner/name"
@@ -27,6 +78,7 @@ public enum GitHub {
         var req = URLRequest(url: u)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("SideStep", forHTTPHeaderField: "User-Agent")
+        if let t = token() { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
         guard let (d, _) = try? await URLSession.shared.data(for: req) else { return nil }
         return try? JSONSerialization.jsonObject(with: d)
     }

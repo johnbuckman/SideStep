@@ -132,6 +132,11 @@ public final class BeaconListener: NSObject {
         busy = true; currentKey = key; lastPush[key] = now
         log("beacon from \(ip): \(bundle) — refreshing over Wi-Fi")
         sendStatus("Mac heard your request…", to: from)
+        // Tell the device who is servicing it, so its popup can show "installed by
+        // <this Mac>, signed by <Apple ID>" (spaces→underscores so the single-line
+        // wire parser keeps them in one token).
+        sendRaw("HOST \(Sideloader.computerName().replacingOccurrences(of: " ", with: "_"))\n", to: from)
+        sendRaw("SIGNER \(app.appleID)\n", to: from)
         setenv("IWISH_IP", ip, 1)   // target the device by the IP the beacon came from
         // Log closure that also forwards friendly status + upload % + ETA to the device.
         var upStart: Date? = nil
