@@ -300,6 +300,65 @@ as the device is on and unlocked, you don’t need to plug it in.</p>
 <br> <em>Apps installed with SideStep — a kitchen timer on an iPad, a
 music player on an iPhone.</em>
 </p>
+<h2 id="give-your-users-a-one-click-installer">Give your users a
+one-click installer</h2>
+<p><strong>SideStep Wizard</strong> lets an app developer hand anyone a
+single file that installs their app — no Xcode and no developer account
+on the other end. You point it at your app’s GitHub repo once, and it
+produces a small <strong>“&lt;name&gt; installer”</strong> you can send
+to people or link from your website.</p>
+<p>Try it — this button installs <strong>Magnatune</strong> (a music
+player) with SideStep:</p>
+<p align="center">
+<span class="sidestep-install" data-repo="johnbuckman/magnatune-app"
+      data-installer="https://github.com/johnbuckman/magnatune-app/releases/latest/download/magnatune-app-installer.zip"></span>
+</p>
+<p><em>If you already have SideStep, the button opens it straight to
+Magnatune — tap Install. If not, it offers the Magnatune installer,
+which installs SideStep first and walks you through the setup.</em></p>
+<h3 id="make-your-own-installer">Make your own installer</h3>
+<ol type="1">
+<li><strong><a href="https://github.com/johnbuckman/SideStepWizard/releases/latest/download/SideStepWizard.dmg">Download
+SideStep Wizard</a></strong> (notarized <code>.dmg</code>) and open
+it.</li>
+<li>Type a short <strong>tiny name</strong> for your app. As you type it
+checks <code>tinyurl.com/&lt;name&gt;</code>: if it already points to
+your GitHub repo it’s reused; if not, click <strong>Create it for
+me</strong> and enter your repo (the one whose Releases hold your
+<code>.ipa</code>) — it registers the short link for you.</li>
+<li>Click <strong>Create Installer</strong>. A file named
+<strong>&lt;name&gt; installer</strong> lands on your Desktop, along with
+ready-to-paste website HTML for a button like the one above.</li>
+</ol>
+<p>The installer is the same signed, notarized app, just renamed — so it
+opens with no Gatekeeper warning. It bundles no copy of SideStep; it
+<strong>downloads the latest SideStep</strong> at run time, so nobody is
+stuck on a stale version. Host it wherever you like — for example, as a
+Release asset on your app’s repo — and point the website button at
+it.</p>
+<script>
+(function () {
+  function mount(el){
+    var repo=el.getAttribute("data-repo"); if(!repo) return;
+    var dl=el.getAttribute("data-installer")||"";
+    var btn=document.createElement("a");
+    btn.textContent="Install with SideStep";
+    btn.href="sidestep://install?repo="+encodeURIComponent(repo);
+    btn.style.cssText="display:inline-block;padding:12px 22px;border-radius:10px;background:#0a84ff;color:#fff;font-weight:600;text-decoration:none;cursor:pointer;";
+    var fb=document.createElement("div"); fb.style.cssText="margin-top:14px;font-size:14px;"; fb.style.display="none";
+    if(dl){fb.innerHTML='SideStep isn’t installed yet. <a href="'+dl+'">Download the Magnatune installer</a> — it installs SideStep and walks you through setup.';}
+    btn.addEventListener("click",function(){
+      var launched=false; function mark(){launched=true;}
+      window.addEventListener("blur",mark,{once:true});
+      document.addEventListener("visibilitychange",function vc(){if(document.hidden){launched=true;document.removeEventListener("visibilitychange",vc);}});
+      setTimeout(function(){window.removeEventListener("blur",mark); if(!launched) fb.style.display="block";},1500);
+    });
+    el.appendChild(btn); el.appendChild(fb);
+  }
+  function init(){document.querySelectorAll(".sidestep-install").forEach(mount);}
+  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",init); else init();
+})();
+</script>
 <h2 id="automatic-updates">Automatic updates</h2>
 <p>Every app SideStep installs carries a small piece of code called a
 <strong>beacon</strong>. When you open the app, it tells your Mac that
