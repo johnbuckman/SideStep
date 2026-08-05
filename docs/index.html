@@ -321,14 +321,14 @@ which installs SideStep first and walks you through the setup.</em></p>
 <li><strong><a href="https://github.com/johnbuckman/SideStepWizard/releases/latest/download/SideStepWizard.dmg">Download
 SideStep Wizard</a></strong> (notarized <code>.dmg</code>) and open
 it.</li>
-<li>Type a short <strong>tiny name</strong> for your app. As you type it
-checks <code>tinyurl.com/&lt;name&gt;</code>: if it already points to
-your GitHub repo it’s reused; if not, click <strong>Create it for
-me</strong> and enter your repo (the one whose Releases hold your
-<code>.ipa</code>) — it registers the short link for you.</li>
+<li>Enter your <strong>GitHub repository</strong> (the one whose Releases
+hold your <code>.ipa</code>) and an <strong>app name</strong>. The wizard
+looks up the repo’s GitHub id — no URL shortener, nothing to register.</li>
 <li>Click <strong>Create Installer</strong>. A file named
-<strong>&lt;name&gt; installer</strong> lands on your Desktop, along with
-ready-to-paste website HTML for a button like the one above.</li>
+<strong>&lt;app&gt; installer (…)</strong> lands on your Desktop — the code
+in parentheses is your repo’s GitHub id, how the installer finds your app
+(reliably, even if you later rename the repo) — along with ready-to-paste
+website HTML for a button like the one above.</li>
 </ol>
 <p>The installer is the same signed, notarized app, just renamed — so it
 opens with no Gatekeeper warning. It bundles no copy of SideStep; it
