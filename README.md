@@ -157,8 +157,8 @@ Try it — this button installs **Magnatune** (a music player) with SideStep:
 ### Make your own installer
 
 1. **[Download SideStep Wizard](https://github.com/johnbuckman/SideStepWizard/releases/latest/download/SideStepWizard.dmg)** (notarized `.dmg`) and open it.
-2. Type a short **tiny name** for your app. As you type it checks `tinyurl.com/‹name›`: if it already points to your GitHub repo it's reused; if not, click **Create it for me** and enter your repo (the one whose Releases hold your `.ipa`) — it registers the short link for you.
-3. Click **Create Installer**. A file named **‹name› installer** lands on your Desktop, along with ready-to-paste website HTML for a button like the one above.
+2. Enter your **GitHub repository** (the one whose Releases hold your `.ipa`) and an **app name**. The wizard looks up the repo's GitHub id — no URL shortener, nothing to register.
+3. Click **Create Installer**. A file named **‹app› installer (…)** lands on your Desktop — the code in parentheses is your repo's GitHub id, how the installer finds your app (reliably, even if you later rename the repo) — along with ready-to-paste website HTML for a button like the one above.
 
 The installer is the same signed, notarized app, just renamed — so it opens with no Gatekeeper warning. It bundles no copy of SideStep; it **downloads the latest SideStep** at run time, so nobody is stuck on a stale version. Host it wherever you like — for example, as a Release asset on your app's repo — and point the website button at it.
 
