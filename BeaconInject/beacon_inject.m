@@ -109,6 +109,56 @@ static void recordHost(NSString *host) {
 static void recordSigner(NSString *signer) {
     [NSUserDefaults.standardUserDefaults setObject:(signer ?: @"") forKey:kSigner];
 }
+
+// ---------- rolling 7-day activity log (shown at the bottom of the popup) ----------
+// Every beacon action is logged — including checks that decide NOT to beacon — so the
+// popup can answer "why isn't this app updating?" days later. Pruned to 7 days / 400 rows.
+static NSString * const kLog = @"ss_log";
+static void beaconLog(NSString *msg) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    NSMutableArray *log = [([d arrayForKey:kLog] ?: @[]) mutableCopy];
+    double now = [NSDate date].timeIntervalSince1970;
+    [log addObject:@{@"t": @(now), @"m": (msg ?: @"?")}];
+    double cutoff = now - 7*86400;
+    NSMutableArray *keep = [NSMutableArray array];
+    for (NSDictionary *e in log) if ([e[@"t"] doubleValue] >= cutoff) [keep addObject:e];
+    if (keep.count > 400) [keep removeObjectsInRange:NSMakeRange(0, keep.count - 400)];
+    [d setObject:keep forKey:kLog];
+    NSLog(@"[beacon-log] %@", msg);
+}
+
+// ---------- pending update (installed, waiting for the app to exit to apply) ----------
+// iOS defers the bundle swap until the running app exits, so a delivered update sits
+// "pending". We flag it, remember the new expiry (sent by the Mac), and clear it once a
+// relaunch shows the running profile's expiry has actually changed.
+static NSString * const kUpdatePending = @"ss_updatePending";       // BOOL
+static NSString * const kPendingExpiry = @"ss_pendingExpiry";       // new profile expiry (from the Mac)
+static NSString * const kPendingOldExpiry = @"ss_pendingOldExpiry"; // running expiry when staged
+static NSString * const kPendingStagedAt = @"ss_pendingStagedAt";   // when the pending build was staged
+static void markUpdatePending(NSString *newExpiryISO) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    NSDate *created, *expires; profileDates(&created, &expires);
+    [d setBool:YES forKey:kUpdatePending];
+    [d setObject:@([NSDate date].timeIntervalSince1970) forKey:kPendingStagedAt];
+    if (newExpiryISO.length) [d setObject:newExpiryISO forKey:kPendingExpiry];
+    if (expires) [d setObject:@(expires.timeIntervalSince1970) forKey:kPendingOldExpiry];
+    beaconLog(newExpiryISO.length
+        ? [NSString stringWithFormat:@"update staged — pending app exit (new signing valid until %@)", newExpiryISO]
+        : @"update staged — pending app exit");
+}
+static void clearPendingIfApplied(void) {
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    if (![d boolForKey:kUpdatePending]) return;
+    NSDate *created, *expires; profileDates(&created, &expires);
+    double oldExp = [d doubleForKey:kPendingOldExpiry];
+    if (expires && oldExp > 0 && fabs(expires.timeIntervalSince1970 - oldExp) > 60) {
+        [d removeObjectForKey:kUpdatePending];
+        [d removeObjectForKey:kPendingExpiry];
+        [d removeObjectForKey:kPendingOldExpiry];
+        [d removeObjectForKey:kPendingStagedAt];
+        beaconLog(@"pending update applied — new signing now active");
+    }
+}
 static void recordAttempt(NSString *why) {
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     [d setObject:[NSDate date] forKey:kAttemptAt];
@@ -199,9 +249,12 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
             } else if (strncmp(buf, "SIGNER ", 7) == 0) {
                 sawAny = YES;
                 recordSigner([[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
+            } else if (strncmp(buf, "EXPIRES ", 8) == 0) {
+                sawAny = YES;   // new signing valid until — the update is staged, pending our exit
+                markUpdatePending([[NSString stringWithUTF8String:buf + 8] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
             }
         } else if (!sawAny && -start.timeIntervalSinceNow > 12) {
-            if (!noReplyRecorded) { recordResult(@"No reply — is SideStep running on your Mac?", NO); noReplyRecorded = YES; }
+            if (!noReplyRecorded) { recordResult(@"No reply — is SideStep running on your Mac?", NO); beaconLog(@"no reply from Mac (asleep/off, or not same Wi-Fi)"); noReplyRecorded = YES; }
             dispatch_async(dispatch_get_main_queue(), ^{ onStatus(@"No reply yet — is SideStep running on your Mac?"); });
         }
     }
@@ -250,14 +303,21 @@ static void autoBeaconTracked(int maxSec, void (^done)(void)) {
                 sawAny = YES;
                 NSString *t = [[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
                 NSString *lc = t.lowercaseString;
-                if ([lc containsString:@"failed"]) { recordResult(t, NO); terminal = YES; }
-                else if ([lc containsString:@"complete"] || [lc containsString:@"relaunch"]) { recordResult(t, YES); terminal = YES; }
+                if ([lc containsString:@"failed"]) { recordResult(t, NO); beaconLog([NSString stringWithFormat:@"Mac: %@", t]); terminal = YES; }
+                else if ([lc containsString:@"complete"] || [lc containsString:@"relaunch"]) { recordResult(t, YES); beaconLog([NSString stringWithFormat:@"Mac: %@", t]); terminal = YES; }
             } else if (strncmp(buf, "PROGRESS ", 9) == 0) {
                 sawAny = YES; int pct = -1; sscanf(buf + 9, "%d", &pct);
-                if (pct >= 100) { recordResult(@"Update delivered (100%).", YES); terminal = YES; }
+                if (pct >= 100) { recordResult(@"Update delivered (100%).", YES); beaconLog(@"update delivered (100%)"); terminal = YES; }
+            } else if (strncmp(buf, "EXPIRES ", 8) == 0) {
+                sawAny = YES;
+                markUpdatePending([[NSString stringWithUTF8String:buf + 8] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
+            } else if (strncmp(buf, "HOST ", 5) == 0) {
+                sawAny = YES; recordHost([[NSString stringWithUTF8String:buf + 5] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
+            } else if (strncmp(buf, "SIGNER ", 7) == 0) {
+                sawAny = YES; recordSigner([[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
             }
         }
-        if (!sawAny) recordResult(@"No reply — SideStep wasn’t reachable (Mac asleep/off, or not on the same Wi-Fi).", NO);
+        if (!sawAny) { recordResult(@"No reply — SideStep wasn’t reachable (Mac asleep/off, or not on the same Wi-Fi).", NO); beaconLog(@"no reply from Mac (asleep/off, or not same Wi-Fi)"); }
         close(s);
         if (done) dispatch_async(dispatch_get_main_queue(), done);
     });
@@ -268,11 +328,30 @@ static void maybeUpdate(const char *why) {
     g_lastReason = [NSString stringWithUTF8String:why];
     NSDate *created, *expires; profileDates(&created, &expires);
     NSTimeInterval age = created ? -created.timeIntervalSinceNow : 1e12;
-    NSLog(@"[beacon] check (%s): profile age %.0fs, threshold %ds", why, age, g_updateSec);
-    if (age > g_updateSec) {
-        NSLog(@"[beacon] stale -> beaconing");
+    NSTimeInterval untilExpiry = expires ? expires.timeIntervalSinceNow : 1e12;
+    // Beacon when the profile is older than the refresh interval, OR when the cert is
+    // getting close to expiry (< 3 days) — so an app left foregrounded near expiry keeps
+    // trying to refresh, not just once per interval. (10167692708)
+    BOOL stale = age > g_updateSec;
+    BOOL nearExpiry = untilExpiry < 3 * 86400;
+    // If an update was staged but the user hasn't exited to apply it, that staged build's
+    // own signing is aging too. Re-beacon to stage a FRESH one so it isn't expired by the
+    // time they finally close the app — the non-coercive fix for 10168170905 (no force-quit).
+    NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
+    BOOL pendingAging = NO;
+    if ([ud boolForKey:kUpdatePending]) {
+        double stagedAt = [ud doubleForKey:kPendingStagedAt];
+        pendingAging = stagedAt > 0 && ([NSDate date].timeIntervalSince1970 - stagedAt) > 5 * 86400;
+    }
+    NSLog(@"[beacon] check (%s): profile age %.0fs, threshold %ds, expiry in %.0fs", why, age, g_updateSec, untilExpiry);
+    if (stale || nearExpiry || pendingAging) {
+        if (pendingAging) beaconLog(@"pending update is aging (not yet applied) → re-staging a fresh build");
+        NSString *reason = untilExpiry < 0 ? @"EXPIRED" : (nearExpiry ? [NSString stringWithFormat:@"expires in %.1fd", untilExpiry/86400.0] : @"stale");
+        beaconLog([NSString stringWithFormat:@"check (%s): %@ → beaconing", why, reason]);
         recordAttempt(g_lastReason);
         autoBeaconTracked(25, nil);   // send + listen + persist outcome for the popup
+    } else {
+        beaconLog([NSString stringWithFormat:@"check (%s): fresh (age %.1fh, expires in %.1fd) → no beacon", why, age/3600.0, untilExpiry/86400.0]);
     }
     rescheduleExpiryNotification();
 }
@@ -329,6 +408,28 @@ static NSString *fmtAgo(NSDate *d) {
     if (s < 172800) return [NSString stringWithFormat:@"%.1f h ago", s/3600];
     return [NSString stringWithFormat:@"%.1f days ago", s/86400];
 }
+// "⏳ UPDATE PENDING" banner for the top of the popup, or empty. Shown when an update
+// has been delivered and is only waiting for the app to fully exit to take effect.
+static NSString *pendingBanner(void) {
+    NSUserDefaults *ud = NSUserDefaults.standardUserDefaults;
+    if (![ud boolForKey:kUpdatePending]) return @"";
+    NSString *exp = [ud stringForKey:kPendingExpiry];
+    return [NSString stringWithFormat:
+        @"⏳ UPDATE PENDING\n  A newer version is installed and will apply when you fully\n"
+        @"  close this app and reopen it.%@\n\n",
+        exp.length ? [NSString stringWithFormat:@"\n  New signing valid until: %@", exp] : @""];
+}
+// The rolling 7-day activity log, newest first, for the bottom of the popup.
+static NSString *logText(void) {
+    NSArray *log = [NSUserDefaults.standardUserDefaults arrayForKey:kLog] ?: @[];
+    if (log.count == 0) return @"RECENT ACTIVITY (7 days)\n  (nothing logged yet)";
+    NSMutableString *s = [NSMutableString stringWithString:@"RECENT ACTIVITY (7 days, newest first)"];
+    for (NSDictionary *e in [log reverseObjectEnumerator]) {
+        NSDate *t = [NSDate dateWithTimeIntervalSince1970:[e[@"t"] doubleValue]];
+        [s appendFormat:@"\n  %@  %@", fmtAgo(t), e[@"m"] ?: @"?"];
+    }
+    return s;
+}
 static NSString *vitalsText(void) {
     NSDictionary *info = NSBundle.mainBundle.infoDictionary, *prof = profileDict();
     NSDate *created = prof[@"CreationDate"], *expires = prof[@"ExpirationDate"];
@@ -348,7 +449,7 @@ static NSString *vitalsText(void) {
     NSString *byStr = host.length
         ? [NSString stringWithFormat:@"%@%@", host, signer.length ? [NSString stringWithFormat:@"  ·  signed by %@", signer] : @""]
         : @"(no install has reported back yet)";
-    return [NSString stringWithFormat:
+    NSString *body = [NSString stringWithFormat:
         @"APP\n  %@  v%@ (%@)\n  %@\n\n"
         @"SOURCE\n  found via: %@\n  %@\n\n"
         @"INSTALLED BY\n  %@\n\n"
@@ -368,6 +469,8 @@ static NSString *vitalsText(void) {
         tryStr, resStr,
         g_macIP.length ? g_macIP : @"(none)", g_port, g_bonjourIP ?: @"(not resolved)",
         UIApplication.sharedApplication.isProtectedDataAvailable ? @"yes" : @"no (locked)"];
+    // Pending-update banner on top, the 7-day activity log at the bottom (scroll to it).
+    return [NSString stringWithFormat:@"%@%@\n\n%@", pendingBanner(), body, logText()];
 }
 
 // Fires only when TWO fingers are held simultaneously in ANY two of the four
@@ -951,6 +1054,20 @@ static void showGrantedToast(NSString *permName) {
     });
 }
 
+// Fire the queued Local-Network-gated action exactly once, marking access ready.
+// Reached two ways: the NWBrowser probe hitting `ready` (fast, exact), OR a fallback
+// timer after the user taps Next (so the action is NEVER stranded if the probe never
+// reports ready — which is what was blocking updates). Idempotent via the g_lnReady guard.
+static void lnBecameReady(BOOL showToast) {
+    if (g_lnReady) return;
+    g_lnReady = YES;
+    [NSUserDefaults.standardUserDefaults setBool:YES forKey:kLNGranted];
+    beaconLog(@"Local Network access ready");
+    if (showToast && g_lnJustPrompted) { g_lnJustPrompted = NO; showGrantedToast(@"Local Network"); }
+    void (^cb)(void) = g_onLNReady; g_onLNReady = nil;
+    if (cb) dispatch_async(dispatch_get_main_queue(), cb);   // e.g. fire the first beacon / the queued update
+}
+
 // A tiny NWBrowser used ONLY to learn whether Local Network access was DENIED
 // (a policy refusal, distinct from Wi-Fi merely being off) so we can nag.
 // Discovery itself still runs through BeaconBonjour.
@@ -962,16 +1079,7 @@ static void startLocalNetworkProbe(void) {
         g_lnProbe = nw_browser_create(desc, params);
         nw_browser_set_queue(g_lnProbe, dispatch_get_main_queue());
         nw_browser_set_state_changed_handler(g_lnProbe, ^(nw_browser_state_t state, nw_error_t error) {
-            if (state == nw_browser_state_ready) {                    // access allowed
-                if (!g_lnReady) {
-                    g_lnReady = YES;
-                    [NSUserDefaults.standardUserDefaults setBool:YES forKey:kLNGranted];
-                    if (g_lnJustPrompted) { g_lnJustPrompted = NO; showGrantedToast(@"Local Network"); }
-                    void (^cb)(void) = g_onLNReady; g_onLNReady = nil;
-                    if (cb) dispatch_async(dispatch_get_main_queue(), cb);   // e.g. fire the first beacon
-                }
-                return;
-            }
+            if (state == nw_browser_state_ready) { lnBecameReady(YES); return; }   // access allowed
             if (state == nw_browser_state_waiting && error) {
                 nw_error_domain_t dom = nw_error_get_error_domain(error);
                 int code = nw_error_get_error_code(error);
@@ -980,6 +1088,7 @@ static void startLocalNetworkProbe(void) {
                            || (dom == nw_error_domain_posix && code == EPERM);
                 if (denied && !g_lnNagShown) {
                     g_lnNagShown = YES;
+                    beaconLog(@"Local Network access DENIED — can't reach the Mac to update");
                     showPermissionNag(@"Local Network",
                         @"SideStep keeps this app up to date by contacting your Mac over Wi-Fi. "
                         @"Without Local Network access it can’t receive new versions.",
@@ -1014,17 +1123,25 @@ static void ensureLocalNetReady(void (^then)(void)) {
     if (g_localNetStarted) return;                            // activity already running; wait for ready
 
     if ([NSUserDefaults.standardUserDefaults boolForKey:kLNGranted]) {
-        // Granted before — start quietly; don't let a slow probe strand the action.
+        // Granted before — start quietly; a fallback guarantees the action runs even if
+        // the probe never reports ready (which was stranding updates).
         startLocalNetworkActivity();
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (!g_lnReady) { g_lnReady = YES; void (^cb)(void) = g_onLNReady; g_onLNReady = nil; if (cb) cb(); }
-        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ lnBecameReady(NO); });
     } else {
         // First run — explain, then Next triggers the real iOS Local Network prompt.
+        // After Next we start LN activity AND arm a fallback: whether or not the probe
+        // ever reports ready, the queued action fires ~5s later (enough time to tap
+        // Allow), so an install/update is never stranded on the permission step. The
+        // probe still fires it instantly when it does report ready; a real denial is
+        // surfaced by the probe's nag independently.
         showPermissionExplain(@"Local Network",
             @"SideStep finds your Mac on your Wi-Fi to install and update apps. "
             @"Next, iOS will ask to allow “Local Network” access — please tap Allow.",
-            ^{ g_lnJustPrompted = YES; startLocalNetworkActivity(); });
+            ^{
+                g_lnJustPrompted = YES;
+                startLocalNetworkActivity();
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ lnBecameReady(YES); });
+            });
     }
 }
 
@@ -1063,11 +1180,14 @@ static void requestNotificationsThenLocalNet(void) {
 
 // ---------- wire-up ----------
 static void onLaunch(void) {
+    clearPendingIfApplied();          // did a relaunch just apply a staged update?
+    beaconLog(@"app launched");
     if (@available(iOS 13.0, *)) {
         [BGTaskScheduler.sharedScheduler registerForTaskWithIdentifier:BG_TASK_ID usingQueue:nil
             launchHandler:^(BGTask *task) {
                 scheduleBGRefresh();
                 g_lastReason = @"bg";
+                beaconLog(@"iOS woke the app in the background (BG refresh task fired)");
                 NSDate *created, *expires; profileDates(&created, &expires);
                 NSTimeInterval age = created ? -created.timeIntervalSinceNow : 1e12;
                 rescheduleExpiryNotification();
@@ -1090,9 +1210,13 @@ static void onLaunch(void) {
                    dispatch_get_main_queue(), ^{ [BeaconVitals.shared attach]; });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ requestNotificationsThenLocalNet(); });
-    [NSTimer scheduledTimerWithTimeInterval:g_fgSec repeats:YES block:^(NSTimer *t) {
-        if (g_lnReady && UIApplication.sharedApplication.applicationState == UIApplicationStateActive)
-            maybeUpdate("foreground-timer");   // only once Local Network is confirmed granted
+    // Check at least every 10 min while foregrounded (not only every g_fgSec/30 min), so
+    // an app left open near expiry keeps trying to refresh. (10167692708)
+    NSTimeInterval fgInterval = MIN((NSTimeInterval)g_fgSec, 600.0);
+    [NSTimer scheduledTimerWithTimeInterval:fgInterval repeats:YES block:^(NSTimer *t) {
+        if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
+        if (g_lnReady) maybeUpdate("foreground-timer");   // only once Local Network is confirmed granted
+        else beaconLog(@"foreground check skipped — Local Network not granted yet");
     }];
 }
 
@@ -1103,7 +1227,9 @@ static void beacon_init(void) {
         object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { onLaunch(); }];
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
         object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+            clearPendingIfApplied();
             if (g_lnReady) maybeUpdate("became-active");   // only beacon once Local Network is granted
+            else beaconLog(@"foregrounded — Local Network not granted yet, not beaconing");
             [BeaconVitals.shared attach];
         }];
 }

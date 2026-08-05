@@ -159,6 +159,10 @@ public final class BeaconListener: NSObject {
                 return
             }
             self.log(msg)
+            if msg.hasPrefix("PROFILE_EXPIRES ") {
+                self.sendRaw("EXPIRES \(msg.dropFirst("PROFILE_EXPIRES ".count))\n", to: from)
+                return
+            }
             if let f = BeaconListener.friendly(msg) { self.sendStatus(f, to: from) }
         }
         Task {
@@ -173,6 +177,18 @@ public final class BeaconListener: NSObject {
                 // Send a final 100% on success so the app relaunches into the new build
                 // no matter which transport was used.
                 self.sendProgress(pct: 100, eta: 0, to: from)
+                // Cascade: while we have this device reachable, refresh EVERY other app
+                // SideStep installed on it — so rarely-opened apps don't silently expire
+                // just because only one app beacons. (10167702445) Sequential + quiet
+                // (no beacon-UI updates for the extras); failures are logged, not fatal.
+                let others = Tracked.all().filter { $0.udid == udid && $0.installedBundleID != bundle }
+                if !others.isEmpty {
+                    self.log("beacon cascade: also refreshing \(others.count) other app(s) on \(udid)")
+                    for t in others {
+                        do { _ = try await Sideloader.refreshOne(t, log: { self.log("cascade[\(t.name)]: \($0)") }) ; self.log("cascade: refreshed \(t.name)") }
+                        catch { self.log("cascade: \(t.name) failed: \(error)") }
+                    }
+                }
             }
             catch { self.sendStatus("Update failed — will retry later.", to: from); self.log("beacon refresh failed: \(error)") }
         }

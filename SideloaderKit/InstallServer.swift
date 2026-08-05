@@ -182,6 +182,7 @@ public final class InstallServer: NSObject {
                 }
                 return
             }
+            if msg.hasPrefix("PROFILE_EXPIRES ") { self.send(c, "EXPIRES \(msg.dropFirst("PROFILE_EXPIRES ".count))"); return }
             if let f = InstallServer.friendly(msg) { self.send(c, "STATUS \(f)") }
         }
 

@@ -776,6 +776,10 @@ public struct Sideloader {
             throw SideErr.fail("\(devName.isEmpty ? "This device" : "“\(devName)”") isn’t registered with \(account.appleID), so iOS won’t install this app on it. Connect it once by USB and try again."
                 + (regError.map { " (\($0.localizedDescription))" } ?? ""))
         }
+        // Machine-readable expiry of the NEW signing, forwarded to the device as an
+        // EXPIRES line so its beacon popup can show "update pending, valid until <date>".
+        let expiryFmt = DateFormatter(); expiryFmt.dateFormat = "yyyy-MM-dd"
+        log("PROFILE_EXPIRES \(expiryFmt.string(from: profile.expirationDate))")
         log("Signing \(displayName)… (profile exp \(profile.expirationDate))")
 
         try run("/usr/libexec/PlistBuddy", ["-c", "Set :CFBundleIdentifier \(bundleID)", plist])

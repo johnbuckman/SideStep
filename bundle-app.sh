@@ -44,9 +44,24 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSHandlerRank</key><string>Alternate</string>
     <key>CFBundleTypeExtensions</key><array><string>ipa</string></array>
   </dict></array>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>com.johnbuckman.sidestep</string>
+    <key>CFBundleURLSchemes</key><array><string>sidestep</string></array>
+  </dict></array>
 </dict></plist>
 PLIST
 
-# ad-hoc sign WITHOUT hardened runtime so it can dlopen AOSKit/AuthKit for Anisette
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1
-echo "built + signed: $APP"
+# Sign WITHOUT hardened runtime so it can dlopen AOSKit/AuthKit for Anisette.
+# Prefer the SAME Developer ID as the release (stable designated requirement =
+# team CDZD6VH5KL + bundle id): an ad-hoc signature has no stable identity, so the
+# keychain re-prompts "SideStep wants to use…" on EVERY rebuild even after "Always
+# Allow". A Developer-ID identity makes that trust persist across rebuilds and match
+# the released app. Falls back to ad-hoc if the identity isn't on this Mac.
+IDENTITY="${SIDESTEP_IDENTITY:-Developer ID Application: John Buckman (CDZD6VH5KL)}"
+if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY"; then
+  codesign --force --deep --sign "$IDENTITY" "$APP" >/dev/null 2>&1
+  echo "built + signed ($IDENTITY): $APP"
+else
+  codesign --force --deep --sign - "$APP" >/dev/null 2>&1
+  echo "built + ad-hoc signed (Developer ID not found — keychain will re-prompt): $APP"
+fi
