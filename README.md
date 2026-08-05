@@ -130,6 +130,7 @@ Try it — this button installs **Magnatune** (a music player) with SideStep:
     function download(){ if(!dl) return; var a=document.createElement("a"); a.href=dl; a.setAttribute("download",""); document.body.appendChild(a); a.click(); document.body.removeChild(a); }
     btn.addEventListener("click",function(){
       if(downloaded) return;
+      btn.textContent="Installing…";
       var launched=false; function mark(){launched=true;}
       window.addEventListener("blur",mark,{once:true});
       document.addEventListener("visibilitychange",function vc(){if(document.hidden){launched=true;document.removeEventListener("visibilitychange",vc);}});
