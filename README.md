@@ -120,19 +120,31 @@ Try it — this button installs **Magnatune** (a music player) with SideStep:
   function mount(el){
     var repo=el.getAttribute("data-repo"); if(!repo) return;
     var dl=el.getAttribute("data-installer")||"";
+    var app=el.getAttribute("data-app")||repo.split("/").pop();
     var btn=document.createElement("a");
-    btn.textContent="Install with SideStep";
+    btn.textContent="Install "+app+" with SideStep";
     btn.href="sidestep://install?repo="+encodeURIComponent(repo);
     btn.style.cssText="display:inline-block;padding:12px 22px;border-radius:10px;background:#0a84ff;color:#fff;font-weight:600;text-decoration:none;cursor:pointer;";
-    var fb=document.createElement("div"); fb.style.cssText="margin-top:14px;font-size:14px;"; fb.style.display="none";
-    if(dl){fb.innerHTML='SideStep isn’t installed yet. <a href="'+dl+'">Download the Magnatune installer</a> — it installs SideStep and walks you through setup.';}
+    var note=document.createElement("div"); note.style.cssText="margin-top:10px;font-size:14px;opacity:.75;"; note.style.display="none";
+    var downloaded=false;
+    function download(){ if(!dl) return; var a=document.createElement("a"); a.href=dl; a.setAttribute("download",""); document.body.appendChild(a); a.click(); document.body.removeChild(a); }
     btn.addEventListener("click",function(){
+      if(downloaded) return;
       var launched=false; function mark(){launched=true;}
       window.addEventListener("blur",mark,{once:true});
       document.addEventListener("visibilitychange",function vc(){if(document.hidden){launched=true;document.removeEventListener("visibilitychange",vc);}});
-      setTimeout(function(){window.removeEventListener("blur",mark); if(!launched) fb.style.display="block";},1500);
+      setTimeout(function(){
+        window.removeEventListener("blur",mark);
+        if(launched) return;
+        if(!dl){ note.textContent="Install SideStep first, then click again."; note.style.display="block"; return; }
+        download();
+        downloaded=true; btn.href=dl; btn.setAttribute("download","");
+        btn.textContent="Run the "+app+" installer now";
+        note.textContent="It’s going to your Downloads folder now.";
+        note.style.display="block";
+      },1500);
     });
-    el.appendChild(btn); el.appendChild(fb);
+    el.appendChild(btn); el.appendChild(note);
   }
   function init(){document.querySelectorAll(".sidestep-install").forEach(mount);}
   if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",init); else init();
