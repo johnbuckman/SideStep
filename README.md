@@ -107,7 +107,7 @@ is on and unlocked, you don't need to plug it in.
 
 ## Give your users a one-click installer
 
-**SideStep Wizard** lets an app developer hand anyone a single file that installs their app — no Xcode and no developer account on the other end. You point it at your app's GitHub repo once, and it produces a small **"‹name› installer"** you can send to people or link from your website.
+**SideStep Wizard** lets an app developer hand anyone a single file that installs their app — no Xcode and no developer account on the other end. You point it at your app's GitHub repo once, and it produces a small **"‹name› installer"** you can send to people or link from your website. **[See the SideStep Wizard site →](https://johnbuckman.github.io/SideStepWizard/)**
 
 Try it — this button installs **Magnatune** (a music player) with SideStep:
 
