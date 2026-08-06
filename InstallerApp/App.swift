@@ -183,6 +183,15 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var githubOfferToken = false
     @Published var githubHasToken = GitHub.hasToken
 
+    // sidestep:// deep-link "land here, then tap Install" confirmation. A URL is
+    // untrusted input (it can arrive from any webpage), so the deep-link only ever
+    // *lands* on this confirm window naming the repo — the actual download/install
+    // never fires until the user clicks Install.
+    @Published var confirmRepo = ""            // "owner/name"
+    @Published var confirmReleaseLine = ""     // "vX.Y — App.ipa" once the release is looked up
+    @Published var confirmChecking = false
+    @Published var confirmTokenWarning: String? = nil   // GitHub's reason a saved token was rejected
+
     // AltStore catalog search
     @Published var altStoreQuery = ""
     @Published var altStoreAllApps: [SourceApp] = []
@@ -318,7 +327,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         guard !accounts.isEmpty else { status = "Add an Apple account first."; addingAccount = true; dlog("startInstall: no accounts"); return }
         // Title for the consolidated install/device dialog.
         switch kind {
-        case .ipa(let path):  installAppName = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        case .ipa(let path):  installAppName = Sideloader.quickAppName(path)   // "Magnatune", not the raw file name
         case .source(let a):  installAppName = a.name
         }
         pendingKind = kind; chosenAppleID = nil
@@ -451,24 +460,104 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     }
     func closeGitHubSearch() { githubWindow?.close(); githubWindow = nil }
 
+    // MARK: sidestep:// deep links
+    /// Route a sidestep:// URL. Supported today:
+    ///   sidestep://install?repo=owner/name   → land on the Install confirm window
+    ///   sidestep://install?repo=owner         → land on that user's app list
+    ///   sidestep://install/owner/name         → path form, same as ?repo=
+    /// A URL can come from an untrusted webpage, so we never auto-install — we only
+    /// open a window where the user taps Install themselves.
+    func handleURLScheme(_ url: URL) {
+        dlog("sidestep:// open \(url.absoluteString)")
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        switch (comps.host ?? "").lowercased() {
+        case "install":
+            var repo = comps.queryItems?.first(where: { $0.name == "repo" })?.value ?? ""
+            if repo.isEmpty { repo = comps.path }              // path form: /owner/name
+            repo = repo.trimmingCharacters(in: CharacterSet(charactersIn: "/ \t\n"))
+            guard !repo.isEmpty else { promptGitHubInstall(); return }   // no repo → manual prompt
+            if let norm = GitHub.normalizeRepo(repo) {
+                presentGitHubInstall(repo: norm)               // owner/name → confirm window
+            } else if !repo.contains("/") {
+                installFromGitHubUser(repo)                     // bare username → their app list
+            } else {
+                presentGitHubInstall(repo: repo)               // best-effort; confirm window reports "not found"
+            }
+        default:
+            dlog("sidestep:// unknown action \(comps.host ?? "")")
+        }
+    }
+
+    /// Open (or reuse) the deep-link confirm window for `repo` and look up its newest
+    /// release so the window can show what will be installed. Nothing downloads here.
+    private var githubConfirmWindow: NSWindow?
+    func presentGitHubInstall(repo: String) {
+        confirmRepo = repo; confirmReleaseLine = ""; confirmChecking = true; confirmTokenWarning = nil
+        if let w = githubConfirmWindow {
+            w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        } else {
+            // NSHostingController so the window grows to fit the release line + any
+            // token-rejected warning that appears after the async lookup.
+            let host = NSHostingController(rootView: GitHubConfirmView(m: self))
+            let w = NSWindow(contentViewController: host)
+            w.styleMask = [.titled, .closable]
+            w.title = "Install from GitHub"
+            w.center(); w.isReleasedWhenClosed = false
+            w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            githubConfirmWindow = w
+        }
+        Task { @MainActor in
+            let rel = await GitHub.latestIPA(repo: repo)
+            guard self.confirmRepo == repo else { return }     // a newer request superseded this one
+            self.confirmChecking = false
+            self.confirmReleaseLine = rel.map { "\($0.tag) — \($0.ipaName)" }
+                ?? "No installable .ipa release found in this repo."
+            // If a saved token was rejected during the lookup, surface why (SideStep fell
+            // back to unauthenticated so this still worked, but at the 60/hr limit).
+            self.confirmTokenWarning = GitHub.tokenRejection
+        }
+    }
+    /// User tapped Install in the confirm window → run the normal GitHub install flow.
+    func confirmGitHubInstall() {
+        let repo = confirmRepo
+        closeGitHubConfirm()
+        installFromGitHub(repo)
+    }
+    func closeGitHubConfirm() { githubConfirmWindow?.close(); githubConfirmWindow = nil }
+
     // MARK: install progress/result window
     private var installProgressWindow: NSWindow?
     /// Open (or reuse) the install-progress window and reset it to a running state.
     func beginInstallProgress(title: String) {
         ipTitle = title; ipStatus = "Starting…"; ipDone = false; ipOK = false; ipResult = ""
         if let w = installProgressWindow { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let host = NSHostingView(rootView: InstallProgressView(m: self))
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 200),
-                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        // Drive the window from an NSHostingController so AppKit sizes it to the SwiftUI
+        // content and re-fits automatically when the result text grows — the old manual
+        // fittingSize on a plain contentView left the window too short and clipped the
+        // OK button.
+        let host = NSHostingController(rootView: InstallProgressView(m: self))
+        let w = NSWindow(contentViewController: host)
+        w.styleMask = [.titled, .closable]
         w.title = "Installing"
-        w.contentView = host; w.setContentSize(host.fittingSize); w.center(); w.isReleasedWhenClosed = false
+        w.center(); w.isReleasedWhenClosed = false
         w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         installProgressWindow = w
     }
     /// Mark the install finished with an outcome; the window shows it + an OK button.
     func finishInstallProgress(ok: Bool, message: String) {
-        ipDone = true; ipOK = ok; ipResult = message
+        ipDone = true; ipOK = ok
+        // The result view already shows a green check icon on success, so drop the
+        // leading "✅ " from the message (otherwise the user sees two green checks).
+        var text = message
+        if text.hasPrefix("✅ ") { text.removeFirst(2) }
+        // On success, remind the user of the one remaining on-device step.
+        if ok {
+            text += "\n\nOn your device, open Settings ▸ General ▸ VPN & Device Management and trust the developer to launch the app."
+        }
+        ipResult = text
         ipStatus = ok ? "Done." : "Failed."
+        // The window is an NSHostingController, so it re-fits to the taller result on
+        // its own — no manual resize needed.
         NSApp.activate(ignoringOtherApps: true)
         installProgressWindow?.makeKeyAndOrderFront(nil)
     }
@@ -1327,6 +1416,54 @@ struct InstallProgressView: View {
                 Spacer()
                 Button(m.ipDone ? "OK" : "Hide") { m.closeInstallProgress() }
                     .keyboardShortcut(.defaultAction)
+                    .fixedSize()   // keep the button at its ideal size — never compress the capsule
+            }
+        }
+        .padding(20).frame(width: 440, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)   // adopt full height so nothing clips
+    }
+}
+
+/// Landing window for a sidestep://install?repo=… deep link. Names the repo, shows
+/// its newest .ipa release, and waits for the user to tap Install — a URL never
+/// installs on its own.
+struct GitHubConfirmView: View {
+    @ObservedObject var m: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Install from GitHub").font(.headline)
+            HStack(spacing: 8) {
+                Image(systemName: "shippingbox").foregroundStyle(.tint)
+                Text(m.confirmRepo).font(.body.monospaced()).textSelection(.enabled)
+            }
+            if m.confirmChecking {
+                HStack(spacing: 10) {
+                    ProgressView().scaleEffect(0.7).frame(width: 16, height: 16)
+                    Text("Checking latest release…").font(.callout).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(m.confirmReleaseLine).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let warn = m.confirmTokenWarning {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text("Your saved GitHub token was rejected, so SideStep is using unauthenticated access (60 requests/hour). GitHub says:\n“\(warn)”")
+                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack(spacing: 12) {
+                        Button("Fix GitHub token…") { if let u = URL(string: GitHub.createTokenURL) { NSWorkspace.shared.open(u) } }
+                        Button("Remove saved token") { GitHub.saveToken(""); m.githubHasToken = false; m.confirmTokenWarning = nil }
+                    }.font(.caption)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.1)))
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { m.closeGitHubConfirm() }.keyboardShortcut(.cancelAction)
+                Button("Install") { m.confirmGitHubInstall() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(20).frame(width: 440, alignment: .leading)
@@ -1384,8 +1521,12 @@ struct GitHubSearchView: View {
 /// routing them into the same install dialog as the in-app "Install from .ipa…" button.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
-        for u in urls where u.pathExtension.lowercased() == "ipa" {
-            Task { @MainActor in AppModel.shared.openIPA(u.path) }
+        for u in urls {
+            if u.scheme?.lowercased() == "sidestep" {
+                Task { @MainActor in AppModel.shared.handleURLScheme(u) }
+            } else if u.pathExtension.lowercased() == "ipa" {
+                Task { @MainActor in AppModel.shared.openIPA(u.path) }
+            }
         }
     }
 

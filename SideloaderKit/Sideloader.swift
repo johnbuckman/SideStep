@@ -562,6 +562,40 @@ public struct Sideloader {
         return Host.current().localizedName ?? ProcessInfo.processInfo.hostName
     }
 
+    /// Best-effort clean app name (CFBundleDisplayName, else CFBundleName) from an
+    /// `.ipa` or `.app`, WITHOUT signing or installing — so the install UI can say
+    /// "Magnatune" instead of a raw file name like
+    /// "gh-D704…-Magnatune-v1.0.2-unsigned". Falls back to the file's base name.
+    public static func quickAppName(_ path: String) -> String {
+        let fallback = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        func nameFrom(_ plist: String) -> String? {
+            for key in ["CFBundleDisplayName", "CFBundleName"] {
+                if let v = try? run("/usr/libexec/PlistBuddy", ["-c", "Print :\(key)", plist]) {
+                    let s = v.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !s.isEmpty { return s }
+                }
+            }
+            return nil
+        }
+        if path.lowercased().hasSuffix(".app") {
+            return nameFrom((path as NSString).appendingPathComponent("Info.plist")) ?? fallback
+        }
+        // .ipa: pull out just the top-level app's Info.plist (not framework plists).
+        let fm = FileManager.default
+        guard let listing = try? run("/usr/bin/unzip", ["-Z1", path]) else { return fallback }
+        guard let entry = listing.split(separator: "\n").map(String.init).first(where: {
+            $0.hasPrefix("Payload/") && $0.hasSuffix(".app/Info.plist")
+                && $0.dropFirst("Payload/".count).filter({ $0 == "/" }).count == 1
+        }) else { return fallback }
+        let tmp = fm.temporaryDirectory.appendingPathComponent("ssname-\(UInt(bitPattern: path.hashValue))")
+        try? fm.removeItem(at: tmp)
+        try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmp) }
+        guard (try? run("/usr/bin/unzip", ["-o", "-j", path, entry, "-d", tmp.path])) != nil
+        else { return fallback }
+        return nameFrom(tmp.appendingPathComponent("Info.plist").path) ?? fallback
+    }
+
     /// Connected iOS devices as (udid, name, conn) where conn is "usb" or "wifi".
     /// Empty if none / tooling missing.
     public static func connectedDevices() -> [(udid: String, name: String, conn: String)] {
@@ -888,7 +922,7 @@ public struct Sideloader {
         AppIconCache.extract(fromApp: cachePath, bundleID: bundleID)   // best-effort icon for the UI
         try? fm.removeItem(at: work)
         log("found via: \(rec.foundVia) — \(rec.autoUpdates ? "app keeps up to date" : "one-time install")")
-        return "✅ Installed \(displayName) (\(bundleID))."
+        return "✅ Installed \(displayName)."
     }
 
     /// Install a chosen app from an AltStore-format source URL.

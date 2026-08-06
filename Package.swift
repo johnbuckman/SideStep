@@ -149,6 +149,15 @@ let package = Package(
             name: "InstallerApp",
             dependencies: ["AltSign", "SwiftBridge", "SideloaderKit"],
             path: "InstallerApp"
+        ),
+
+        // Minimal standalone installer (distinct bundle id). No SideloaderKit/OpenSSL,
+        // no embedded SideStep — it downloads the latest SideStep from GitHub releases,
+        // readies the device using SideStep's own tools, then hands off via sidestep://.
+        // Renamed "Install owner--repo.app" (its filename carries the repo).
+        .executableTarget(
+            name: "SideStepInstaller",
+            path: "SideStepInstaller"
         )
     ],
 

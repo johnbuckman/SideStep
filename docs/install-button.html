@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install with SideStep — drop-in button</title>
+<style>
+  :root { color-scheme: light dark; --fg:#111; --muted:#666; --bg:#fff; --card:#f5f5f7; --accent:#0a84ff; --border:#ddd; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#eee; --muted:#9a9a9a; --bg:#1c1c1e; --card:#2c2c2e; --accent:#0a84ff; --border:#3a3a3c; } }
+  body { font: 15px/1.5 -apple-system, system-ui, sans-serif; color:var(--fg); background:var(--bg); max-width:720px; margin:40px auto; padding:0 20px; }
+  h1 { font-size:1.5rem; } h2 { font-size:1.1rem; margin-top:2rem; }
+  pre { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; overflow-x:auto; font-size:13px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .demo { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:24px; margin:20px 0; text-align:center; }
+  .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<h1>“Install with SideStep” button</h1>
+<p class="muted">Drop this on any page. If the visitor already has SideStep installed, the button opens it straight onto the app’s Install page (they tap <b>Install</b>). If not, it falls back to downloading the one-click installer that walks them through setup first.</p>
+
+<div class="demo">
+  <!-- ===== drop-in starts here ===== -->
+  <span class="sidestep-install"
+        data-repo="johnbuckman/magnatune-app"
+        data-installer-base="https://johnbuckman.github.io/SideStep/installers/">
+  </span>
+  <!-- ===== drop-in ends here ===== -->
+</div>
+
+<h2>How it decides installed vs. not</h2>
+<p class="muted">
+  A custom URL scheme gives no direct “is it installed?” signal, so we infer it: after
+  firing <code>sidestep://…</code> we watch for the page losing focus / visibility within
+  ~1.5&nbsp;s. If SideStep launches, the browser backgrounds and we know it’s installed. If
+  nothing happens, we reveal the installer-download fallback. A URL never installs anything on
+  its own — SideStep only <em>lands</em> on its Install page and the user taps Install.
+</p>
+
+<h2>The snippet</h2>
+<p class="muted">Copy the <code>&lt;span&gt;</code> and the <code>&lt;script&gt;</code> once per page. Set <code>data-repo</code> to <code>owner/repo</code> and <code>data-installer-base</code> to wherever your <code>Install&nbsp;owner--repo.app</code> files are hosted (or drop that attribute to hide the fallback).</p>
+<pre><code>&lt;span class="sidestep-install"
+      data-repo="johnbuckman/magnatune-app"
+      data-installer-base="https://johnbuckman.github.io/SideStep/installers/"&gt;&lt;/span&gt;
+
+&lt;script src="sidestep-install.js" defer&gt;&lt;/script&gt;</code></pre>
+
+<p class="muted">The script below is what <code>sidestep-install.js</code> contains — it’s inlined here so this page is self-contained.</p>
+
+<script>
+(function () {
+  // Encode "owner/repo" the way the installer filename does: "/" -> "--".
+  // A .app is a directory; the web download is the ditto-zip make-installer.sh emits.
+  function installerFile(repo) { return "Install " + repo.replace("/", "--") + ".app.zip"; }
+
+  function mount(el) {
+    var repo = el.getAttribute("data-repo");
+    if (!repo) return;
+    var base = el.getAttribute("data-installer-base") || "";
+
+    var btn = document.createElement("a");
+    btn.textContent = "Install with SideStep";
+    btn.href = "sidestep://install?repo=" + encodeURIComponent(repo);
+    btn.style.cssText =
+      "display:inline-block;padding:12px 22px;border-radius:10px;background:#0a84ff;" +
+      "color:#fff;font-weight:600;text-decoration:none;cursor:pointer;";
+
+    var fallback = document.createElement("div");
+    fallback.style.cssText = "margin-top:14px;font-size:14px;display:none;";
+    if (base) {
+      var dl = base.replace(/\/?$/, "/") + encodeURIComponent(installerFile(repo));
+      fallback.innerHTML =
+        'SideStep isn’t installed yet. ' +
+        '<a href="' + dl + '">Download the ' + repo + ' installer</a> — ' +
+        'it installs SideStep and walks you through setting up your device.';
+    } else {
+      fallback.textContent =
+        "If nothing happened, SideStep isn’t installed yet — install SideStep first, then click again.";
+    }
+
+    btn.addEventListener("click", function () {
+      // If SideStep launches, the page loses focus/visibility. Watch for that; if it
+      // never comes within the window, assume SideStep isn't installed.
+      var launched = false;
+      function mark() { launched = true; }
+      window.addEventListener("blur", mark, { once: true });
+      document.addEventListener("visibilitychange", function vc() {
+        if (document.hidden) { launched = true; document.removeEventListener("visibilitychange", vc); }
+      });
+      setTimeout(function () {
+        window.removeEventListener("blur", mark);
+        if (!launched) fallback.style.display = "block";
+      }, 1500);
+    });
+
+    el.appendChild(btn);
+    el.appendChild(fallback);
+  }
+
+  function init() {
+    document.querySelectorAll(".sidestep-install").forEach(mount);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();
+</script>
+</body>
+</html>

@@ -105,6 +105,63 @@ is on and unlocked, you don't need to plug it in.
   <em>Apps installed with SideStep — a kitchen timer on an iPad, a music player on an iPhone.</em>
 </p>
 
+## Give your users a one-click installer
+
+**SideStep Wizard** lets an app developer hand anyone a single file that installs their app — no Xcode and no developer account on the other end. You point it at your app's GitHub repo once, and it produces a small **"‹name› installer"** you can send to people or link from your website.
+
+Try it — this button installs **Magnatune** (a music player) with SideStep:
+
+<p align="center">
+  <span class="sidestep-install" data-repo="johnbuckman/magnatune-app"
+        data-installer="https://github.com/johnbuckman/magnatune-app/releases/latest/download/magnatune-app-installer.zip"></span>
+</p>
+<script>
+(function () {
+  function mount(el){
+    var repo=el.getAttribute("data-repo"); if(!repo) return;
+    var dl=el.getAttribute("data-installer")||"";
+    var app=el.getAttribute("data-app")||repo.split("/").pop();
+    var btn=document.createElement("a");
+    btn.textContent="Install "+app+" with SideStep";
+    btn.href="sidestep://install?repo="+encodeURIComponent(repo);
+    btn.style.cssText="display:inline-block;padding:12px 22px;border-radius:10px;background:#0a84ff;color:#fff;font-weight:600;text-decoration:none;cursor:pointer;";
+    var note=document.createElement("div"); note.style.cssText="margin-top:10px;font-size:14px;opacity:.75;"; note.style.display="none";
+    var downloaded=false;
+    function download(){ if(!dl) return; var a=document.createElement("a"); a.href=dl; a.setAttribute("download",""); document.body.appendChild(a); a.click(); document.body.removeChild(a); }
+    btn.addEventListener("click",function(){
+      if(downloaded) return;
+      btn.textContent="Installing…";
+      var launched=false; function mark(){launched=true;}
+      window.addEventListener("blur",mark,{once:true});
+      document.addEventListener("visibilitychange",function vc(){if(document.hidden){launched=true;document.removeEventListener("visibilitychange",vc);}});
+      setTimeout(function(){
+        window.removeEventListener("blur",mark);
+        if(launched) return;
+        if(!dl){ note.textContent="Install SideStep first, then click again."; note.style.display="block"; return; }
+        download();
+        downloaded=true; btn.href=dl; btn.setAttribute("download","");
+        btn.textContent="Run the "+app+" installer now";
+        note.textContent="It’s going to your Downloads folder now.";
+        note.style.display="block";
+      },1500);
+    });
+    el.appendChild(btn); el.appendChild(note);
+  }
+  function init(){document.querySelectorAll(".sidestep-install").forEach(mount);}
+  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",init); else init();
+})();
+</script>
+
+*If you already have SideStep, the button opens it straight to Magnatune — tap Install. If not, it offers the Magnatune installer, which installs SideStep first and walks you through the setup.*
+
+### Make your own installer
+
+1. **[Download SideStep Wizard](https://github.com/johnbuckman/SideStepWizard/releases/latest/download/SideStepWizard.dmg)** (notarized `.dmg`) and open it.
+2. Enter your **GitHub repository** (the one whose Releases hold your `.ipa`) and an **app name**. The wizard looks up the repo's GitHub id — no URL shortener, nothing to register.
+3. Click **Create Installer**. A file named **‹app› installer (…)** lands on your Desktop — the code in parentheses is your repo's GitHub id, how the installer finds your app (reliably, even if you later rename the repo) — along with ready-to-paste website HTML for a button like the one above.
+
+The installer is the same signed, notarized app, just renamed — so it opens with no Gatekeeper warning. It bundles no copy of SideStep; it **downloads the latest SideStep** at run time, so nobody is stuck on a stale version. Host it wherever you like — for example, as a Release asset on your app's repo — and point the website button at it.
+
 ## Automatic updates
 
 Every app SideStep installs carries a small piece of code called a **beacon**. When

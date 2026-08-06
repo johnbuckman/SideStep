@@ -19,6 +19,12 @@ public enum GitHub {
     /// The URL where a user creates a token (fine-grained; public-repo read is enough).
     public static let createTokenURL = "https://github.com/settings/tokens?type=beta"
 
+    /// Set when a saved token is rejected by GitHub (bad/expired, or blocked by an org
+    /// policy such as forbidding long-lived fine-grained PATs) — carries GitHub's own
+    /// explanation. nil when the token works or none is saved. The UI surfaces it so the
+    /// user can fix the token instead of silently running at the lower unauth limit.
+    public static var tokenRejection: String?
+
     public static func token() -> String? {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                 kSecAttrService as String: tokenService,
@@ -75,12 +81,31 @@ public enum GitHub {
 
     private static func apiJSON(_ urlString: String) async -> Any? {
         guard let u = URL(string: urlString) else { return nil }
-        var req = URLRequest(url: u)
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("SideStep", forHTTPHeaderField: "User-Agent")
-        if let t = token() { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
-        guard let (d, _) = try? await URLSession.shared.data(for: req) else { return nil }
-        return try? JSONSerialization.jsonObject(with: d)
+        func fetch(useToken: Bool) async -> (json: Any?, status: Int) {
+            var req = URLRequest(url: u)
+            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            req.setValue("SideStep", forHTTPHeaderField: "User-Agent")
+            if useToken, let t = token() { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
+            guard let (d, resp) = try? await URLSession.shared.data(for: req) else { return (nil, 0) }
+            return (try? JSONSerialization.jsonObject(with: d), (resp as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        let first = await fetch(useToken: true)
+        if first.status == 200, token() != nil { tokenRejection = nil }   // token works → clear any warning
+        // A saved token that a repo/org rejects — bad/expired (401) OR blocked by org
+        // policy (403, e.g. an org that forbids long-lived fine-grained PATs) — returns a
+        // JSON *object*, not the array callers expect, and would break every lookup. Fall
+        // back to unauthenticated so PUBLIC-repo lookups keep working regardless.
+        if (first.status == 401 || first.status == 403), token() != nil {
+            let msg = (first.json as? [String: Any])?["message"] as? String ?? ""
+            // A rate-limit 403 is NOT a token problem (the token is valid, just throttled),
+            // so don't flag it as a bad token. Anything else = the token was rejected.
+            if !msg.lowercased().contains("rate limit") {
+                tokenRejection = msg.isEmpty ? "GitHub rejected your saved token (HTTP \(first.status))." : msg
+            }
+            let retry = await fetch(useToken: false)
+            if retry.json is [Any] || retry.json is [String: Any] { return retry.json }
+        }
+        return first.json
     }
 
     /// Remaining unauthenticated "core" API requests this hour (the budget that the
