@@ -65,6 +65,30 @@
       "display:inline-block;padding:12px 22px;border-radius:10px;background:#0a84ff;" +
       "color:#fff;font-weight:600;text-decoration:none;cursor:pointer;";
 
+    // SideStep is a Mac app that sideloads onto an iPhone/iPad over USB; both the sidestep://
+    // hand-off and the .app installer are useless off a Mac. If this page isn't on a Mac, say
+    // why instead of firing a link that silently does nothing. iPadOS Safari masquerades as a
+    // Mac (UA "Macintosh", platform "MacIntel"), so a REAL Mac is Mac-like AND non-touch; an
+    // iPad is Mac-like WITH touch (maxTouchPoints > 1) — that's the discriminator.
+    var macLike = /Mac/.test(navigator.platform || navigator.userAgent || "");
+    var touch = (navigator.maxTouchPoints || 0) > 1;
+    if (!(macLike && !touch)) {
+      var onApple = /iPhone|iPad|iPod/.test(navigator.userAgent || "") || (macLike && touch);
+      btn.removeAttribute("href");
+      btn.style.background = "#8e8e93";
+      btn.style.cursor = "default";
+      btn.style.pointerEvents = "none";
+      btn.setAttribute("aria-disabled", "true");
+      var whyEl = document.createElement("div");
+      whyEl.style.cssText = "margin-top:14px;font-size:14px;";
+      whyEl.textContent = onApple
+        ? "SideStep installs apps onto your iPhone or iPad from a Mac. Open this page on a Mac, then plug this device in with a USB cable."
+        : "SideStep runs on a Mac. Open this page on a Mac to install.";
+      el.appendChild(btn);
+      el.appendChild(whyEl);
+      return;
+    }
+
     var fallback = document.createElement("div");
     fallback.style.cssText = "margin-top:14px;font-size:14px;display:none;";
     if (base) {

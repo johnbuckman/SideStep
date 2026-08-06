@@ -353,6 +353,24 @@ enum WebSnippet {
             btn.href="sidestep://install?repo="+encodeURIComponent(repo);
             if(BUTTON_CLASS) btn.className=BUTTON_CLASS; else btn.style.cssText=BUTTON_STYLE;
             var note=document.createElement("div"); note.style.cssText="margin-top:10px;font-size:14px;opacity:.75;"; note.style.display="none";
+            // SideStep is a Mac app that sideloads onto an iPhone/iPad over USB; both the
+            // sidestep:// hand-off and the .app installer are useless off a Mac. So if this
+            // page isn't on a Mac, show why instead of firing a link that silently does nothing.
+            // iPadOS Safari masquerades as a Mac (UA "Macintosh", platform "MacIntel"), so a
+            // REAL Mac is Mac-like AND non-touch; an iPad is Mac-like WITH touch (maxTouchPoints>1).
+            var macLike=/Mac/.test(navigator.platform||navigator.userAgent||"");
+            var touch=(navigator.maxTouchPoints||0)>1;
+            if(!(macLike&&!touch)){
+              var onApple=/iPhone|iPad|iPod/.test(navigator.userAgent||"")||(macLike&&touch);
+              btn.removeAttribute("href");
+              if(!BUTTON_CLASS) btn.style.cssText=BUTTON_STYLE+"background:#8e8e93;cursor:default;";
+              btn.style.pointerEvents="none"; btn.setAttribute("aria-disabled","true");
+              note.textContent=onApple
+                ? "SideStep installs "+app+" onto your iPhone or iPad from a Mac. Open this page on a Mac, then plug this device in with a USB cable."
+                : "SideStep runs on a Mac. Open this page on a Mac to install "+app+".";
+              note.style.display="block";
+              el.appendChild(btn); el.appendChild(note); return;
+            }
             var downloaded=false;
             function download(){ if(!dl) return; var a=document.createElement("a"); a.href=dl; a.setAttribute("download",""); document.body.appendChild(a); a.click(); document.body.removeChild(a); }
             btn.addEventListener("click",function(ev){
