@@ -33,6 +33,25 @@ final class Configurator: ObservableObject {
     @Published var installerURL = ""
     @Published var copied = false     // set once "Copy HTML" is clicked, to confirm on screen
 
+    init() { loadSettings() }
+
+    // Persist what the developer last entered — reruns usually tweak one small thing, so
+    // restoring the repo URL, app name, and hosting URL saves them re-typing it all.
+    private enum Keys { static let repo = "wizard.repoURL", name = "wizard.appName", host = "wizard.hostURL" }
+    private func loadSettings() {
+        let d = UserDefaults.standard
+        repoInput   = d.string(forKey: Keys.repo) ?? ""
+        appName     = d.string(forKey: Keys.name) ?? ""
+        installerURL = d.string(forKey: Keys.host) ?? ""
+        if !appName.isEmpty { appNameEdited = true }   // don't let repoChanged() overwrite a restored name
+    }
+    func saveSettings() {
+        let d = UserDefaults.standard
+        d.set(repoInput, forKey: Keys.repo)
+        d.set(appName, forKey: Keys.name)
+        d.set(installerURL, forKey: Keys.host)
+    }
+
     /// Default the app name to the repo's last component until the user edits it.
     func repoChanged() {
         guard !appNameEdited else { return }
@@ -42,16 +61,17 @@ final class Configurator: ObservableObject {
     func create() {
         error = ""
         guard let repo = RepoName.normalize(repoInput) else {
-            error = "Enter a GitHub repo as owner/name (e.g. johnbuckman/magnatune-app), or paste its github.com URL."
+            error = "Enter your repo’s GitHub URL, e.g. https://github.com/owner/name."
             return
         }
         let name = appName.trimmingCharacters(in: .whitespaces).isEmpty
             ? RepoName.display(repo) : appName.trimmingCharacters(in: .whitespaces)
+        saveSettings()   // remember these inputs for the next run
         busy = true; status = "Looking up \(repo) on GitHub…"
         Task {
             guard let id = await GitHubID.idFor(repo) else {
                 busy = false
-                error = "Couldn’t find \(repo) on GitHub. Check the owner/name — and that the repo is public."
+                error = "Couldn’t find that repo on GitHub. Check the URL — and that the repo is public."
                 return
             }
             await buildInstaller(repo: repo, name: name, id: id)
@@ -78,15 +98,16 @@ final class Configurator: ObservableObject {
             // download. ditto's PKZip keeps the bundle intact AND preserves the stapled
             // notarization ticket, so the unzipped installer still verifies offline. (Plain
             // `zip` would mangle the bundle's symlinks / extended attributes.)
-            // Name the zip "<name> installer.zip" — deliberately without the GitHub-id suffix
-            // or ".app". The id only needs to live on the .app bundle INSIDE the zip (which
-            // keeps its real name), so the hosted download stays a clean "Decaid installer.zip".
+            // Emit the .zip under a provisional "<name> installer.zip"; it's renamed to match the
+            // filename in the hosting URL when the developer moves on (syncZipNameToURL). The id
+            // only needs to live on the .app bundle INSIDE the zip (which keeps its real name).
             let zip = desktop.appendingPathComponent("\(name) installer.zip")
             if fm.fileExists(atPath: zip.path) { try fm.removeItem(at: zip) }
             try Self.ditto(zip: zip, of: dst)
 
             madeRepo = repo; madeName = name; madeId = id; madePath = dst.path; madeZipPath = zip.path
-            installerURL = ""          // developer types where they'll host it, on the next screen
+            // Keep whatever hosting URL was restored/entered (don't clear it) so a rerun doesn't
+            // make the developer re-type it.
             copied = false
             busy = false; phase = .host
         } catch {
@@ -96,18 +117,44 @@ final class Configurator: ObservableObject {
 
     var installerFilename: String { RepoName.installFilename(display: madeName, id: madeId) + ".app" }
     var installerDisplayName: String { RepoName.installFilename(display: madeName, id: madeId) } // Finder hides .app
-    /// The hosted .zip's filename — no GitHub-id suffix, no ".app" (e.g. "Decaid installer.zip").
-    var installerZipName: String { "\(madeName) installer.zip" }
+    /// The hosted .zip's filename — the filename part of the hosting URL the developer entered,
+    /// so the file on disk matches their link exactly. Falls back to "<name> installer.zip"
+    /// before a URL is entered.
+    var installerZipName: String {
+        let u = installerURL.trimmingCharacters(in: .whitespaces)
+        if !u.isEmpty {
+            var s = u
+            if let cut = s.firstIndex(where: { $0 == "?" || $0 == "#" }) { s = String(s[..<cut]) }  // drop query/fragment
+            if let tail = s.split(separator: "/").last.map(String.init), !tail.isEmpty {
+                return tail.removingPercentEncoding ?? tail
+            }
+        }
+        return "\(madeName) installer.zip"
+    }
     /// Suggested fallback URL: the installer .zip as a "latest release" asset on the app's own
-    /// GitHub repo — where a developer naturally uploads it, and what the button downloads when
-    /// the visitor doesn't have SideStep yet. Just a default; the developer can change it.
+    /// GitHub repo — where a developer naturally uploads it. Just a default; the developer can change it.
     var defaultInstallerURL: String {
-        let enc = installerZipName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? installerZipName
+        let file = "\(madeName) installer.zip"
+        let enc = file.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file
         return "https://github.com/\(madeRepo)/releases/latest/download/\(enc)"
+    }
+    /// Rename the Desktop .zip so its filename matches the hosting URL's filename part.
+    func syncZipNameToURL() {
+        guard !madeZipPath.isEmpty else { return }
+        let fm = FileManager.default
+        let src = URL(fileURLWithPath: madeZipPath)
+        let target = src.deletingLastPathComponent().appendingPathComponent(installerZipName)
+        guard target.lastPathComponent != src.lastPathComponent else { return }   // already matches
+        do {
+            if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+            try fm.moveItem(at: src, to: target)
+            madeZipPath = target.path
+        } catch { /* non-fatal — keep the existing zip */ }
     }
     var html: String { WebSnippet.html(repo: madeRepo, name: madeName, installerURL: installerURL) }
 
     func revealInFinder() {
+        syncZipNameToURL()   // make the revealed .zip already match the hosting link's filename
         var urls = [URL(fileURLWithPath: madePath)]
         if !madeZipPath.isEmpty { urls.append(URL(fileURLWithPath: madeZipPath)) }
         NSWorkspace.shared.activateFileViewerSelecting(urls)   // selects both the .app and the .zip
@@ -156,8 +203,8 @@ struct DeveloperView: View {
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("GitHub repository").font(.callout.weight(.medium))
-                TextField("owner/name  or  https://github.com/owner/name", text: $c.repoInput)
+                Text("GitHub repository URL").font(.callout.weight(.medium))
+                TextField("https://github.com/owner/name", text: $c.repoInput)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: c.repoInput) { _ in c.repoChanged() }
             }
@@ -197,7 +244,7 @@ struct DeveloperView: View {
                 Text("Where will you host the installer?").font(.callout.weight(.medium))
                 TextField("https://…/\(c.installerZipName)", text: $c.installerURL)
                     .textFieldStyle(.roundedBorder)
-                Text("Upload **\(c.installerZipName)** somewhere public and paste its link here — it's the download visitors get if they don't already have SideStep. A common choice is your repo's latest GitHub release: \(c.defaultInstallerURL)")
+                Text("Paste the public link where you'll host the installer — it's the download visitors get if they don't already have SideStep. Your Desktop **.zip is renamed to match its filename** (**\(c.installerZipName)**). A common choice is your repo's latest GitHub release: \(c.defaultInstallerURL)")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
 
@@ -207,7 +254,7 @@ struct DeveloperView: View {
                 Button("Reveal on Desktop") { c.revealInFinder() }
                 Button("Test the Installer") { c.testInstaller() }
                 Spacer()
-                Button("Next: Website Button") { c.copied = false; c.phase = .snippet }
+                Button("Next: Website Button") { c.syncZipNameToURL(); c.saveSettings(); c.copied = false; c.phase = .snippet }
                     .keyboardShortcut(.defaultAction)
                     .disabled(c.installerURL.trimmingCharacters(in: .whitespaces).isEmpty)
             }
