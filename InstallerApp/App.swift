@@ -168,6 +168,10 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     private var pendingKind: InstallKind?
     private var pendingGithub: (repo: String, tag: String)?   // set only for a GitHub install
     private var chosenAppleID: String?
+    // When an install is requested with no Apple ID signed in (only reachable from a
+    // sidestep:// deep-link), we pop up the Add-Apple-ID sign-in and resume this install
+    // once the user has signed in.
+    private var resumeInstallAfterLogin = false
 
     // GitHub + AltStore dialogs
     @Published var showGitHubInstall = false
@@ -237,6 +241,14 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                             self.appleID = ""; self.password = ""; self.code = ""; self.textMeCode = false
                             self.loginStage = .idle; self.loginStatus = ""; self.addingAccount = false
                             self.status = "Added \(account.appleID)."
+                            // Resume a deep-link install that was waiting on the user's first
+                            // Apple ID (the Add-Apple-ID popup path): close the popup and pick
+                            // up the install right where it left off.
+                            if self.resumeInstallAfterLogin, let k = self.pendingKind {
+                                self.resumeInstallAfterLogin = false
+                                self.closeAddAccount()
+                                self.startInstall(k)
+                            }
                             Task.detached {
                                 let teams = await Sideloader.fetchTeamInfos(account: account, session: session)
                                 await MainActor.run {
@@ -324,7 +336,18 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
 
     func startInstall(_ kind: InstallKind) {
         dlog("startInstall: kind=\(kind), accounts=\(accounts.count)")
-        guard !accounts.isEmpty else { status = "Add an Apple account first."; addingAccount = true; dlog("startInstall: no accounts"); return }
+        // No Apple ID yet. This is only reachable from a sidestep:// deep-link (the in-panel
+        // Install actions stay hidden until an account exists), so the menu-bar popover — which
+        // hosts the sign-in form — isn't open; just flipping `addingAccount` would prompt in a
+        // panel nobody can see, and the install would silently stall. Instead, at this same
+        // account-decision point (cf. the >1-account picker just below), pop up the Add-Apple-ID
+        // sign-in as its own window and resume this install once the user has signed in.
+        guard !accounts.isEmpty else {
+            pendingKind = kind; resumeInstallAfterLogin = true
+            dlog("startInstall: no accounts — prompting Add Apple ID popup")
+            presentAddAccount()
+            return
+        }
         // Title for the consolidated install/device dialog.
         switch kind {
         case .ipa(let path):  installAppName = Sideloader.quickAppName(path)   // "Magnatune", not the raw file name
@@ -524,6 +547,29 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         installFromGitHub(repo)
     }
     func closeGitHubConfirm() { githubConfirmWindow?.close(); githubConfirmWindow = nil }
+
+    // MARK: Add-Apple-ID popup (popover-safe window)
+    // Shown when an install is requested but no Apple ID is signed in — e.g. a first-time
+    // sidestep:// deep-link, where the menu-bar popover (which normally hosts the sign-in
+    // form) isn't open. Same fields as the in-panel form, but as its own window; on a
+    // successful sign-in the pending install resumes automatically (see proceedLogin).
+    private var addAccountWindow: NSWindow?
+    func presentAddAccount() {
+        addingAccount = true                       // put the shared login state into add mode
+        loginStage = .idle; loginStatus = ""
+        NSApp.activate(ignoringOtherApps: true)
+        if let w = addAccountWindow { w.makeKeyAndOrderFront(nil); return }
+        let host = NSHostingController(rootView: AddAccountView(m: self))
+        let w = NSWindow(contentViewController: host)
+        w.styleMask = [.titled, .closable]
+        w.title = "Add an Apple ID"
+        w.center(); w.isReleasedWhenClosed = false
+        w.makeKeyAndOrderFront(nil)
+        addAccountWindow = w
+    }
+    func closeAddAccount() { addAccountWindow?.close(); addAccountWindow = nil }
+    /// User dismissed the Add-Apple-ID popup without signing in — drop the pending install.
+    func cancelAddAccount() { resumeInstallAfterLogin = false; cancelLogin(); closeAddAccount() }
 
     // MARK: install progress/result window
     private var installProgressWindow: NSWindow?
@@ -1467,6 +1513,38 @@ struct GitHubConfirmView: View {
             }
         }
         .padding(20).frame(width: 440, alignment: .leading)
+    }
+}
+
+/// Popover-safe "Add an Apple ID" window — shown when an install (e.g. a first-time
+/// sidestep:// deep-link) needs an account and none is signed in. Same fields as the
+/// in-panel sign-in form; on success the pending install resumes automatically.
+struct AddAccountView: View {
+    @ObservedObject var m: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Add an Apple ID").font(.headline)
+            Text("Installing needs an Apple ID to sign the app onto your device. Any Apple ID works — a free one is fine.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextField("Apple ID (email)", text: $m.appleID).textFieldStyle(.roundedBorder).disabled(m.loginStage == .working)
+            SecureField("Password", text: $m.password).textFieldStyle(.roundedBorder).disabled(m.loginStage == .working).onSubmit { m.login() }
+            Toggle("Text me the code (no Apple device signed into this account)", isOn: $m.textMeCode).font(.caption).disabled(m.loginStage == .working)
+            if m.loginStage == .needs2FA {
+                HStack {
+                    TextField("2-factor code", text: $m.code).textFieldStyle(.roundedBorder).frame(width: 130).onSubmit { m.submitCode() }
+                    Button("Verify") { m.submitCode() }.keyboardShortcut(.defaultAction)
+                }
+            }
+            HStack {
+                Button("Sign in") { m.login() }.keyboardShortcut(.defaultAction).disabled(m.loginStage != .idle)
+                Button("Cancel") { m.cancelAddAccount() }.keyboardShortcut(.cancelAction)
+                if m.loginStage == .working { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
+                Text(m.loginStatus).font(.caption).foregroundStyle(.red)
+            }
+            Text("Create free Apple accounts at [icloud.com](https://www.icloud.com/) — each free account can install **3 apps**. A $99/year Apple Developer subscription removes the limit.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(20).frame(width: 420, alignment: .leading)
     }
 }
 
