@@ -365,6 +365,11 @@ enum WebSnippet {
               btn.removeAttribute("href");
               if(!BUTTON_CLASS) btn.style.cssText=BUTTON_STYLE+"background:#8e8e93;cursor:default;";
               btn.style.pointerEvents="none"; btn.setAttribute("aria-disabled","true");
+              // A site BUTTON_CLASS can be a fixed-height pill (line-height≈45px, overflow:hidden,
+              // white-space:nowrap) that CLIPS a 2nd line — relax those so the warning below shows.
+              btn.style.height="auto"; btn.style.lineHeight="1.3"; btn.style.overflow="visible"; btn.style.whiteSpace="normal"; btn.style.paddingTop="10px"; btn.style.paddingBottom="10px";
+              // "⚠️ Must be run on a Mac" is a 2nd line of text INSIDE the disabled button.
+              var warn=document.createElement("span"); warn.textContent="\u{26A0}\u{FE0F} Must be run on a Mac"; warn.style.cssText="display:block;font-size:.85em;font-weight:600;margin-top:2px;"; btn.appendChild(warn);
               note.textContent=onApple
                 ? "SideStep installs "+app+" onto your iPhone or iPad from a Mac. Open this page on a Mac, then plug this device in with a USB cable."
                 : "SideStep runs on a Mac. Open this page on a Mac to install "+app+".";
