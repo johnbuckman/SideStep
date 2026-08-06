@@ -8,9 +8,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 IDENTITY="${SIDESTEP_IDENTITY:-Developer ID Application: John Buckman (CDZD6VH5KL)}"
-# Use bping-notary — sidestep-notary is NOT working with Apple right now (do not use it
-# until John says otherwise).
-PROFILE="${NOTARY_PROFILE:-bping-notary}"
+# sidestep-notary is now accepted by Apple (previously stuck in first-submission hold, so
+# bping-notary was used as a stand-in). Override with NOTARY_PROFILE=<name> if needed.
+PROFILE="${NOTARY_PROFILE:-sidestep-notary}"
 SHORT_VERSION="$(tr -d ' \n' < VERSION.txt)"
 OUT="${1:-./dist}"
 mkdir -p "$OUT"

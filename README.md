@@ -113,6 +113,7 @@ Try it — this button installs **Magnatune** (a music player) with SideStep:
 
 <p align="center">
   <span class="sidestep-install" data-repo="johnbuckman/magnatune-app"
+        data-app="Magnatune"
         data-installer="https://github.com/johnbuckman/magnatune-app/releases/latest/download/magnatune-app-installer.zip"></span>
 </p>
 <script>
@@ -131,13 +132,13 @@ Try it — this button installs **Magnatune** (a music player) with SideStep:
     btn.addEventListener("click",function(){
       if(downloaded) return;
       btn.textContent="Installing…";
-      var launched=false; function mark(){launched=true;}
-      window.addEventListener("blur",mark,{once:true});
+      // Key off document.hidden ONLY — not window "blur", which also fires when the browser
+      // shows a "scheme has no registered handler" alert, wrongly suppressing the fallback.
+      var launched=false;
       document.addEventListener("visibilitychange",function vc(){if(document.hidden){launched=true;document.removeEventListener("visibilitychange",vc);}});
       setTimeout(function(){
-        window.removeEventListener("blur",mark);
         if(launched) return;
-        if(!dl){ note.textContent="Install SideStep first, then click again."; note.style.display="block"; return; }
+        if(!dl){ note.textContent="Install SideStep first, then click again."; note.style.display="block"; btn.textContent="Install "+app+" with SideStep"; return; }
         download();
         downloaded=true; btn.href=dl; btn.setAttribute("download","");
         btn.textContent="Run the "+app+" installer now";

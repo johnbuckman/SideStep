@@ -79,16 +79,14 @@
     }
 
     btn.addEventListener("click", function () {
-      // If SideStep launches, the page loses focus/visibility. Watch for that; if it
-      // never comes within the window, assume SideStep isn't installed.
+      // If SideStep launches, the browser backgrounds this page and it becomes hidden.
+      // Key off document.hidden ONLY — not window "blur", which also fires when the browser
+      // shows a "scheme has no registered handler" alert, wrongly suppressing the fallback.
       var launched = false;
-      function mark() { launched = true; }
-      window.addEventListener("blur", mark, { once: true });
       document.addEventListener("visibilitychange", function vc() {
         if (document.hidden) { launched = true; document.removeEventListener("visibilitychange", vc); }
       });
       setTimeout(function () {
-        window.removeEventListener("blur", mark);
         if (!launched) fallback.style.display = "block";
       }, 1500);
     });

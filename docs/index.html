@@ -311,6 +311,7 @@ to people or link from your website.</p>
 player) with SideStep:</p>
 <p align="center">
 <span class="sidestep-install" data-repo="johnbuckman/magnatune-app"
+      data-app="Magnatune"
       data-installer="https://github.com/johnbuckman/magnatune-app/releases/latest/download/magnatune-app-installer.zip"></span>
 </p>
 <p><em>If you already have SideStep, the button opens it straight to
@@ -352,13 +353,13 @@ it.</p>
     btn.addEventListener("click",function(){
       if(downloaded) return;                       // button now points at the installer; let it download
       btn.textContent="Installing…";               // immediate feedback that the tap registered
-      var launched=false; function mark(){launched=true;}
-      window.addEventListener("blur",mark,{once:true});
+      // Key off document.hidden ONLY — not window "blur", which also fires when the browser
+      // shows a "scheme has no registered handler" alert, wrongly suppressing the fallback.
+      var launched=false;
       document.addEventListener("visibilitychange",function vc(){if(document.hidden){launched=true;document.removeEventListener("visibilitychange",vc);}});
       setTimeout(function(){
-        window.removeEventListener("blur",mark);
         if(launched) return;                        // SideStep opened
-        if(!dl){ note.textContent="Install SideStep first, then click again."; note.style.display="block"; return; }
+        if(!dl){ note.textContent="Install SideStep first, then click again."; note.style.display="block"; btn.textContent="Install "+app+" with SideStep"; return; }
         download();                                 // SideStep isn't installed → fetch the installer
         downloaded=true; btn.href=dl; btn.setAttribute("download","");
         btn.textContent="Run the "+app+" installer now";
