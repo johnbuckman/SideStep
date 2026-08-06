@@ -63,7 +63,23 @@ struct WizardView: View {
         WizBody(icon: "cable.connector",
                 title: "Plug in your device",
                 blurb: "Connect your iPhone or iPad to this Mac with a USB cable. If a “Trust This Computer?” prompt appears, you’ll handle it on the next step.") {
-            WizStatus(text: w.detail.isEmpty ? "Waiting for a device on USB…" : w.detail, busy: true, ok: true)
+            if let options = w.picker {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("More than one device is connected — choose which to set up:")
+                        .font(.callout).foregroundStyle(.secondary)
+                    ForEach(options) { opt in
+                        Button {
+                            w.choose(udid: opt.id, rawName: opt.name)
+                        } label: {
+                            Label(opt.name == opt.id ? "Unknown device (…\(opt.id.suffix(6)))" : opt.name,
+                                  systemImage: "iphone").frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.bordered).controlSize(.large)
+                    }
+                }
+            } else {
+                WizStatus(text: w.detail.isEmpty ? "Waiting for a device on USB…" : w.detail, busy: true, ok: true)
+            }
         }
     }
 
@@ -88,7 +104,7 @@ struct WizardView: View {
                 HStack {
                     Spacer()
                     Button("Turn On Developer Mode") { w.enableDeveloperMode() }
-                        .disabled(w.busy || w.device == nil)
+                        .disabled(w.busy || w.chosen == nil)
                 }
             }
         }

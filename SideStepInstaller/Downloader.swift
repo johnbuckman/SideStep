@@ -16,25 +16,43 @@ enum Downloader {
 
     enum Result { case installed(URL), failure(String) }
 
-    /// Ensure a verified SideStep is in /Applications and return its path. If one is
-    /// already installed we use it (fast, and never clobbers a running copy); otherwise
-    /// we download the latest release, verify it's notarized + our team, and install it.
+    /// Ensure a CURRENT, verified SideStep is installed and return its path. If none is
+    /// installed, download + verify + install the latest. If one is installed but OLDER
+    /// than the latest release, update it in place (quit → replace → relaunch) — this is
+    /// what guarantees the installed SideStep has the sidestep:// hand-off support. If it's
+    /// already current (or GitHub can't be reached), use the existing copy.
     static func ensureSideStep(progress: @escaping (String) -> Void) async -> Result {
         let fm = FileManager.default
         let sys = URL(fileURLWithPath: "/Applications/SideStep.app")
         let user = fm.urls(for: .applicationDirectory, in: .userDomainMask).first?.appendingPathComponent("SideStep.app")
-        for existing in [sys, user].compactMap({ $0 }) where fm.fileExists(atPath: existing.path) {
-            progress("SideStep is already installed.")
-            launch(existing)
-            return .installed(existing)
+        let installed = [sys, user].compactMap { $0 }.first { fm.fileExists(atPath: $0.path) }
+
+        if let installed {
+            progress("Checking for the latest SideStep…")
+            if let latest = await latestRelease() {
+                let current = installedVersion(at: installed) ?? "0"
+                if isOlder(current, than: latest.version) {
+                    progress("Updating SideStep \(current) → \(latest.version)…")
+                    if let app = await downloadAndVerify(latest.asset),
+                       let dst = try? install(from: app, preferring: installed) {
+                        launch(dst)
+                        return .installed(dst)
+                    }
+                    // Update couldn't be downloaded/verified — fall back to the existing copy
+                    // rather than failing outright.
+                    progress("Couldn’t update; using the installed SideStep.")
+                }
+            }
+            launch(installed)
+            return .installed(installed)
         }
 
         progress("Finding the latest SideStep…")
-        guard let asset = await latestAssetURL() else {
+        guard let latest = await latestRelease() else {
             return .failure("Couldn’t find the latest SideStep release on GitHub.")
         }
         progress("Downloading SideStep…")
-        guard let app = await downloadAndVerify(asset) else {
+        guard let app = await downloadAndVerify(latest.asset) else {
             return .failure("The download couldn’t be verified as an official, notarized SideStep.")
         }
         progress("Installing SideStep…")
@@ -47,21 +65,40 @@ enum Downloader {
         }
     }
 
-    // MARK: release lookup
+    // MARK: release lookup + version comparison
 
-    private static func latestAssetURL() async -> URL? {
+    private static func latestRelease() async -> (version: String, asset: URL)? {
         var req = URLRequest(url: releasesAPI)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("SideStep", forHTTPHeaderField: "User-Agent")
         guard let (data, _) = try? await URLSession.shared.data(for: req),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
               let first = arr.first,
+              let tag = first["tag_name"] as? String,
               let assets = first["assets"] as? [[String: Any]] else { return nil }
         func asset(_ suffix: String) -> URL? {
             guard let a = assets.first(where: { ($0["name"] as? String)?.lowercased().hasSuffix(suffix) == true }),
                   let s = a["browser_download_url"] as? String else { return nil }
             return URL(string: s)
         }
-        return asset(".dmg") ?? asset(".zip")
+        guard let url = asset(".dmg") ?? asset(".zip") else { return nil }
+        return (tag, url)
+    }
+
+    private static func installedVersion(at app: URL) -> String? {
+        NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))?["CFBundleShortVersionString"] as? String
+    }
+
+    /// Dotted numeric comparison, ignoring a "v" prefix and any "-beta.N" suffix.
+    private static func versionKey(_ s: String) -> [Int] {
+        var v = s.lowercased(); if v.hasPrefix("v") { v.removeFirst() }
+        let main = v.split(separator: "-").first.map(String.init) ?? v
+        var nums = main.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+        while nums.count < 3 { nums.append(0) }
+        return Array(nums.prefix(3))
+    }
+    private static func isOlder(_ a: String, than b: String) -> Bool {
+        versionKey(a).lexicographicallyPrecedes(versionKey(b))
     }
 
     // MARK: download + verify (never run from the mount / archive)
@@ -104,7 +141,7 @@ enum Downloader {
 
     // MARK: install into /Applications (fall back to ~/Applications)
 
-    private static func install(from verifiedApp: URL) throws -> URL {
+    private static func install(from verifiedApp: URL, preferring: URL? = nil) throws -> URL {
         let fm = FileManager.default
         // Quit any running SideStep so its bundle isn't busy when we replace it.
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: "com.johnbuckman.sidestep") {
@@ -113,8 +150,12 @@ enum Downloader {
         usleep(500_000)
         let sys = URL(fileURLWithPath: "/Applications/SideStep.app")
         let user = fm.urls(for: .applicationDirectory, in: .userDomainMask).first?.appendingPathComponent("SideStep.app")
+        // When updating, replace the copy that's already there (its exact location);
+        // otherwise prefer /Applications, then ~/Applications.
+        var candidates = [preferring, sys, user].compactMap { $0 }
+        var seen = Set<String>(); candidates = candidates.filter { seen.insert($0.standardizedFileURL.path).inserted }
         var lastErr = "no writable Applications folder"
-        for dst in [sys, user].compactMap({ $0 }) {
+        for dst in candidates {
             do {
                 if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
                 try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)

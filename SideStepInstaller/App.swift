@@ -25,6 +25,11 @@ enum WizardStep: Int, CaseIterable {
     case ready          // hand off to sidestep://install?repo=…
 }
 
+/// The USB device the wizard is working with (tracked by UDID; name filled in once known).
+struct Chosen: Equatable { let udid: String; var name: String }
+/// A device option shown in the picker when more than one is connected.
+struct DeviceOption: Identifiable, Equatable { let id: String; let name: String }  // id = udid
+
 @MainActor
 final class Wizard: ObservableObject {
     let token: InstallToken     // from the filename: an explicit owner/repo, or a tiny alias
@@ -34,8 +39,19 @@ final class Wizard: ObservableObject {
     @Published var detail = ""
     @Published var busy = false
     @Published var failed = false                 // install step hit an error; offer Retry
-    @Published var device: (udid: String, name: String, conn: String)?
+    @Published var chosen: Chosen?                 // the USB device we're setting up
+    @Published var picker: [DeviceOption]? = nil   // set when >1 USB device — user must choose
     @Published var devModeNeedsManual = false
+
+    /// The chosen device's name for status text ("your device" until it's known/trusted).
+    var deviceName: String { chosen?.name ?? "your device" }
+
+    /// User picked a device (or exactly one was found). Remember it by UDID and proceed.
+    func choose(udid: String, rawName: String) {
+        chosen = Chosen(udid: udid, name: (rawName.isEmpty || rawName == udid) ? "your device" : rawName)
+        picker = nil
+        advance(to: .trust)
+    }
 
     private var sideStepApp: URL?
     private var tool: DeviceTool?
@@ -126,54 +142,67 @@ final class Wizard: ObservableObject {
 
     private func startDevMode() {
         sawDeviceBeforeReboot = false; devModeNeedsManual = false
-        if let udid = device?.udid { _ = tool?.revealDeveloperMode(udid) }
+        if let udid = chosen?.udid { _ = tool?.revealDeveloperMode(udid) }
         startPolling()
     }
 
     private func poll() {
         guard let tool else { return }
-        let devices = tool.connectedDevices()
-        let usb = devices.first(where: { $0.conn == "usb" }) ?? devices.first
-        device = usb
+        // ONLY USB-connected devices count. Trust-pairing, Developer-Mode arm, and the
+        // first install all require USB — and an older SideStep's beacon/Wi-Fi-sync can
+        // make a previously-paired device discoverable over the network, which must NOT
+        // advance the wizard (the "jumped straight to Dev Mode with nothing plugged in" bug).
+        let usb = tool.connectedDevices().filter { $0.conn == "usb" }
 
         switch step {
         case .connect:
-            if let d = usb {
-                detail = "Found \(d.name == d.udid ? "a device" : d.name) over USB."
-                advance(to: .trust)
-            } else { detail = "Waiting for a device on USB…" }
+            if usb.isEmpty { picker = nil; detail = "Waiting for a device on USB…"; return }
+            if usb.count == 1 { choose(udid: usb[0].udid, rawName: usb[0].name); return }
+            // More than one → let the user pick which to set up.
+            picker = usb.map { DeviceOption(id: $0.udid, name: $0.name) }
+            detail = "More than one device is connected — choose which to set up."
 
         case .trust:
-            guard let d = usb else { detail = "Device disconnected — plug it back in."; advance(to: .connect); return }
-            if d.name != d.udid { detail = "Trusted: \(d.name)."; advance(to: .devMode) }
-            else { detail = "On the device, tap “Trust” and enter its passcode…" }
+            guard let chosen else { advance(to: .connect); return }
+            guard let d = usb.first(where: { $0.udid == chosen.udid }) else {
+                detail = "\(chosen.name) disconnected — plug it back in."; advance(to: .connect); return
+            }
+            if d.name != d.udid {                      // trusted → the real name is now readable
+                self.chosen?.name = d.name
+                detail = "Trusted: \(d.name)."
+                advance(to: .devMode)
+            } else {
+                detail = "On \(chosen.name), tap “Trust” and enter its passcode…"
+            }
 
         case .devMode:
-            guard let d = usb else {
+            guard let chosen else { advance(to: .connect); return }
+            guard usb.contains(where: { $0.udid == chosen.udid }) else {
                 sawDeviceBeforeReboot = true
-                detail = "The device is restarting to turn on Developer Mode…"; return
+                detail = "\(chosen.name) is restarting to turn on Developer Mode…"; return
             }
-            if sawDeviceBeforeReboot { detail = "Device is back. Unlock it and confirm Developer Mode if asked…" }
-            switch tool.developerMode(d.udid) {
-            case .enabled:     detail = "Developer Mode is on."; advance(to: .ready)
-            case .unsupported: detail = "This device doesn’t require Developer Mode."; advance(to: .ready)
+            if sawDeviceBeforeReboot { detail = "\(chosen.name) is back. Unlock it and confirm Developer Mode if asked…" }
+            switch tool.developerMode(chosen.udid) {
+            case .enabled:     detail = "Developer Mode is on on \(chosen.name)."; advance(to: .ready)
+            case .unsupported: detail = "\(chosen.name) doesn’t require Developer Mode."; advance(to: .ready)
             case .disabled, .unknown:
-                if !busy && !devModeNeedsManual { detail = "Turning on Developer Mode…" }
+                if !busy && !devModeNeedsManual { detail = "Turning on Developer Mode on \(chosen.name)…" }
             }
         default: break
         }
     }
 
     func enableDeveloperMode() {
-        guard let udid = device?.udid, let tool else { return }
-        busy = true; detail = "Asking the device to enable Developer Mode…"
+        guard let udid = chosen?.udid, let tool else { return }
+        let name = deviceName
+        busy = true; detail = "Asking \(name) to enable Developer Mode…"
         Task.detached {
             let r = tool.tryEnableDeveloperMode(udid)
             await MainActor.run {
                 self.busy = false
                 switch r {
-                case .enabled:   self.detail = "Developer Mode enabled."
-                case .rebooting: self.detail = "The device is restarting. Unlock it, then tap “Turn On”."
+                case .enabled:   self.detail = "Developer Mode enabled on \(name)."
+                case .rebooting: self.detail = "\(name) is restarting. Unlock it, then tap “Turn On”."
                 case .needsManual, .unknown:
                     self.devModeNeedsManual = true
                     self.detail = DeviceTool.developerModeHelp
