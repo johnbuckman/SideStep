@@ -269,13 +269,19 @@ enum RepoName {
     /// "Install <stem>" (owner--repo or tinyurl alias) are still accepted.
     static func token(fromInstallFilename base: String) -> InstallToken? {
         let s = base.trimmingCharacters(in: .whitespaces)
-        // Preferred: a trailing "(<base62 id>)" → GitHub repo id.
-        if let p = s.range(of: "\\(([0-9A-Za-z]+)\\)$", options: .regularExpression) {
-            let code = String(s[p].dropFirst().dropLast())          // inside the parens
+        // Preferred: the "(<base62 id>)" that follows "installer" → GitHub repo id. Match the
+        // parens right after "installer" instead of anchoring to the END of the name, so a
+        // duplicate-download suffix the browser/Finder tacks on AFTER the parens doesn't hide
+        // the id: Safari/Finder → "…(10XqZe) 2", Chrome → "…(10XqZe) (1)", Finder → "…(10XqZe) copy".
+        // Take the LAST such group in case the app name itself contains "installer (…)".
+        if let re = try? NSRegularExpression(pattern: "[Ii]nstaller \\(([0-9A-Za-z]+)\\)"),
+           let m = re.matches(in: s, range: NSRange(s.startIndex..., in: s)).last,
+           let idRange = Range(m.range(at: 1), in: s) {
+            let code = String(s[idRange])                           // inside the parens
             if let id = Base62.decode(code) {
-                let namePart = String(s[..<p.lowerBound]).trimmingCharacters(in: .whitespaces)
-                let disp = stem(of: namePart) ?? (namePart.isEmpty ? "your app" : namePart)
-                return .id(id, display: disp)
+                var namePart = ""
+                if let full = Range(m.range, in: s) { namePart = String(s[..<full.lowerBound]).trimmingCharacters(in: .whitespaces) }
+                return .id(id, display: namePart.isEmpty ? "your app" : namePart)
             }
         }
         // Legacy: strip " installer" suffix / "Install " prefix → owner--repo or alias.

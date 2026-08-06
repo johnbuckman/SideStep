@@ -308,8 +308,9 @@ enum WebSnippet {
             var note=document.createElement("div"); note.style.cssText="margin-top:10px;font-size:14px;opacity:.75;"; note.style.display="none";
             var downloaded=false;
             function download(){ if(!dl) return; var a=document.createElement("a"); a.href=dl; a.setAttribute("download",""); document.body.appendChild(a); a.click(); document.body.removeChild(a); }
-            btn.addEventListener("click",function(){
-              if(downloaded) return;
+            btn.addEventListener("click",function(ev){
+              if(downloaded) return;                        // 2nd click: button now points at the installer — let it download
+              ev.preventDefault();                          // launch the app ourselves; letting the <a href="sidestep://"> navigate is what pops Safari's "address is invalid" dialog
               btn.textContent="Installing\\u2026";
               // If SideStep launches, the browser backgrounds this page and it becomes hidden.
               // We key off document.hidden ONLY — not window "blur", which also fires when the
@@ -317,6 +318,17 @@ enum WebSnippet {
               // conclude SideStep opened and skip the installer download.
               var launched=false;
               document.addEventListener("visibilitychange",function vc(){if(document.hidden){launched=true;document.removeEventListener("visibilitychange",vc);}});
+              var scheme="sidestep://install?repo="+encodeURIComponent(repo);
+              // Safari pops a blocking "address is invalid" dialog when a custom scheme has no
+              // handler and you navigate the TOP window — but NOT inside a hidden iframe, where a
+              // missing handler fails silently. Other browsers block iframe scheme-launches, so
+              // navigate the window there (they show no blocking dialog when the handler's absent).
+              var isSafari=/^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent)&&/apple/i.test(navigator.vendor||"");
+              if(isSafari){
+                var ifr=document.createElement("iframe"); ifr.style.display="none"; ifr.src=scheme;
+                document.body.appendChild(ifr);
+                setTimeout(function(){ if(ifr.parentNode) ifr.parentNode.removeChild(ifr); },1000);
+              } else { window.location.href=scheme; }
               setTimeout(function(){
                 if(launched) return;                        // SideStep opened → nothing to do
                 if(!dl){ note.textContent="Install SideStep first, then click again."; note.style.display="block"; btn.textContent="Install "+app+" with SideStep"; return; }
