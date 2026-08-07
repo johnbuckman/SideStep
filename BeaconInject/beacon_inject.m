@@ -98,6 +98,11 @@ static NSString * const kAttemptWhy = @"ss_attemptWhy";
 static NSString * const kResultAt = @"ss_resultAt";
 static NSString * const kResult = @"ss_result";
 static NSString * const kResultOK = @"ss_resultOK";
+// Set once we've run the notifications ask (explainer + iOS system prompt). A
+// re-signed / sideloaded app often can't get the system prompt to "stick" — the
+// status stays NotDetermined — so honoring that literally would re-show the
+// "Notifications access is needed" card on EVERY launch. This flag caps it at one ask.
+static NSString * const kNotifAsked = @"ss_notifAsked";   // BOOL
 // Who last serviced this app: the Mac's name and the signing Apple ID. Sent by the
 // Mac (HOST / SIGNER lines) and shown in the diagnostics + install popups.
 static NSString * const kHost = @"ss_host";
@@ -1154,7 +1159,24 @@ static void requestNotificationsThenLocalNet(void) {
                        @"expires. Without notifications, it can quietly stop working.";
     [c getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *s) {
         UNAuthorizationStatus st = s.authorizationStatus;
+        // Record what iOS actually reports each launch, so the diagnostics log can
+        // answer "is the permission stuck at NotDetermined, or already granted?".
+        NSString *stName = st == UNAuthorizationStatusNotDetermined ? @"notDetermined"
+                         : st == UNAuthorizationStatusDenied        ? @"denied"
+                         : st == UNAuthorizationStatusAuthorized    ? @"authorized"
+                         : st == UNAuthorizationStatusProvisional   ? @"provisional"
+                         : st == UNAuthorizationStatusEphemeral     ? @"ephemeral" : @"unknown";
+        beaconLog([NSString stringWithFormat:@"notif permission status = %@", stName]);
         if (st == UNAuthorizationStatusNotDetermined) {
+            if ([NSUserDefaults.standardUserDefaults boolForKey:kNotifAsked]) {
+                // We already ran the ask once. iOS still reports NotDetermined (common
+                // for a sideloaded app whose prompt didn't stick), but re-nagging every
+                // launch is exactly what we're avoiding — proceed silently.
+                beaconLog(@"notifications still NotDetermined but already asked once — not re-nagging");
+                dispatch_async(dispatch_get_main_queue(), gotoLocalNet);
+                return;
+            }
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:kNotifAsked];
             dispatch_async(dispatch_get_main_queue(), ^{
                 showPermissionExplain(@"Notifications", detail, ^{
                     [c requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
