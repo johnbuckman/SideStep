@@ -64,6 +64,28 @@ final class RefreshDaemon {
     }
 }
 
+/// The beacon listener + install server open LAN sockets (UDP broadcast, a TCP
+/// listener, and Bonjour advertising), which is what makes macOS 15+ show the
+/// one-time "SideStep would like to find devices on your local network" prompt.
+/// macOS gives no API to query that permission's state, so we can't literally
+/// "check before asking" — the closest equivalent is to only ask when the feature
+/// is actually reachable: start these servers only once SideStep has installed at
+/// least one app that could beacon for a Wi-Fi update. A fresh SideStep with no
+/// sideloaded apps never opens these sockets, so it never provokes the prompt.
+/// Both `.start()` calls self-guard against double-start, so this is safe to call
+/// repeatedly (at launch, and again right after the first install).
+enum LANServices {
+    static func startIfNeeded() {
+        guard !Tracked.all().isEmpty else {
+            dlog("LANServices: skipped — no tracked apps yet (avoids the Local Network prompt)")
+            return
+        }
+        dlog("LANServices: starting beacon listener + install server")
+        BeaconListener.shared.start(log: { print("[SideStep beacon] \($0)") })
+        InstallServer.shared.start(log: { print("[SideStep installsrv] \($0)") })
+    }
+}
+
 let SideStepLogPath = (("~/Library/Logs/SideStep.log") as NSString).expandingTildeInPath
 // Held for the process lifetime so the diagnostics pipe's read end never closes.
 private var diagPipe: Pipe?
@@ -758,7 +780,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                 case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, confirm: confirm, log: log, onProgress: onProgress, onInstall: onInstall)
                 }
                 dlog("execute: install SUCCEEDED — \(result)")
-                await MainActor.run { self.status = result; self.finishInstallProgress(ok: true, message: result); self.maybeShowTrustHint(appleID: account.appleID) }
+                await MainActor.run { self.status = result; self.finishInstallProgress(ok: true, message: result); self.maybeShowTrustHint(appleID: account.appleID); LANServices.startIfNeeded() }
             } catch {
                 dlog("execute: INSTALL FAILED — \(String(reflecting: error))")
                 if case SideErr.deviceLimit(let aid, let devName, let bid, let others) = error {
@@ -1745,10 +1767,9 @@ struct InstallerApp: App {
             dlog("post-launch: starting RefreshDaemon…")
             RefreshDaemon.shared.start()
             dlog("post-launch: RefreshDaemon started")
-            dlog("post-launch: starting BeaconListener…")
-            BeaconListener.shared.start(log: { print("[SideStep beacon] \($0)") })
-            InstallServer.shared.start(log: { print("[SideStep installsrv] \($0)") })
-            dlog("post-launch: BeaconListener started")
+            dlog("post-launch: starting LAN services (only if there are apps to serve)…")
+            LANServices.startIfNeeded()   // gated so a fresh SideStep never triggers the Local Network prompt
+            dlog("post-launch: LAN services evaluated")
             UpdateChecker.shared.checkIfDue()   // daily GitHub-Releases self-update check
             Task { await Blocklist.refresh() }  // pull the latest anti-piracy blocklist from the repo
         }
