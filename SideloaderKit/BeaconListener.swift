@@ -171,7 +171,14 @@ public final class BeaconListener: NSObject {
             defer { unsetenv("IWISH_IP") }
             defer { self.q.async { self.busy = false; self.currentKey = nil; self.lastPush[key] = Date() } }
             do {
-                _ = try await Sideloader.refreshOne(app, log: statusLog)
+                // Hard per-app deadline so a wedged step (stuck device install, hung
+                // Apple API call) can never pin `busy` on forever — which is what left
+                // the device stuck on "Still updating — hang on…". On timeout this throws,
+                // `busy` is reset by the defer above, and the device retries on its next
+                // beacon. The subprocess steps inside are separately bounded (ProcessWatchdog).
+                _ = try await Sideloader.withTimeout(360, "Updating \(app.name)") {
+                    try await Sideloader.refreshOne(app, log: statusLog)
+                }
                 // The USB path doesn't stream upload PROGRESS, so the on-device beacon
                 // never reaches the pct>=100 that triggers its exit-to-apply-the-swap.
                 // Send a final 100% on success so the app relaunches into the new build
@@ -180,12 +187,13 @@ public final class BeaconListener: NSObject {
                 // Cascade: while we have this device reachable, refresh EVERY other app
                 // SideStep installed on it — so rarely-opened apps don't silently expire
                 // just because only one app beacons. (10167702445) Sequential + quiet
-                // (no beacon-UI updates for the extras); failures are logged, not fatal.
+                // (no beacon-UI updates for the extras); failures (incl. per-app timeout)
+                // are logged, not fatal — one stuck app can't block the rest.
                 let others = Tracked.all().filter { $0.udid == udid && $0.installedBundleID != bundle }
                 if !others.isEmpty {
                     self.log("beacon cascade: also refreshing \(others.count) other app(s) on \(udid)")
                     for t in others {
-                        do { _ = try await Sideloader.refreshOne(t, log: { self.log("cascade[\(t.name)]: \($0)") }) ; self.log("cascade: refreshed \(t.name)") }
+                        do { _ = try await Sideloader.withTimeout(360, "Updating \(t.name)") { try await Sideloader.refreshOne(t, log: { self.log("cascade[\(t.name)]: \($0)") }) } ; self.log("cascade: refreshed \(t.name)") }
                         catch { self.log("cascade: \(t.name) failed: \(error)") }
                     }
                 }

@@ -10,6 +10,9 @@ import Security
 
 public enum SideErr: LocalizedError {
     case fail(String)
+    /// A step ran past its deadline and was abandoned, so the caller can give up
+    /// cleanly and retry on the next beacon/timer instead of hanging forever.
+    case timeout(String)
     /// The device couldn't be registered because this Apple ID hit Apple's per-type
     /// device-registration limit. Carries the account it failed on, the device's name,
     /// and the other Apple IDs already in SideStep (so the UI can offer a retry).
@@ -17,6 +20,7 @@ public enum SideErr: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .fail(let s): return s
+        case .timeout(let s): return s
         case .deviceLimit(let aid, let dev, _, _):
             return "Apple won’t register \(dev.isEmpty ? "this device" : "“\(dev)”") on \(aid) — it has reached Apple’s limit on how many devices this Apple ID can register. Install with a different Apple ID to add more devices."
         }
@@ -424,9 +428,58 @@ final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unc
 
 // MARK: - Provision + sign + install
 
+/// Bounds a blocking subprocess. A `Process` read/`waitUntilExit()` can hang forever
+/// if the device stops responding mid-install (the classic wedged-update case) — and
+/// async cancellation can't interrupt that blocking call. This watchdog SIGTERMs (then
+/// SIGKILLs after a short grace) the process once it outlives its deadline, which
+/// unblocks the read so the caller can throw and retry later instead of hanging.
+/// Cancel it as soon as the process exits on its own.
+final class ProcessWatchdog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    private var _fired = false
+    var fired: Bool { lock.lock(); defer { lock.unlock() }; return _fired }
+    init(_ p: Process, seconds: TimeInterval) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds) { [weak p] in
+            self.lock.lock()
+            if self.done { self.lock.unlock(); return }
+            self._fired = true
+            self.lock.unlock()
+            guard let p, p.isRunning else { return }
+            p.terminate()
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+                if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+            }
+        }
+    }
+    func cancel() { lock.lock(); done = true; lock.unlock() }
+}
+
 public struct Sideloader {
+    /// Run an async step under a hard deadline. If `op` doesn't finish in time we throw
+    /// `SideErr.timeout` and cancel it, so a stuck Apple-API/network call can't wedge the
+    /// beacon updater — the device just retries on its next beacon. (Blocking subprocess
+    /// steps are additionally bounded by ProcessWatchdog, since cancellation alone can't
+    /// interrupt them.)
+    static func withTimeout<T: Sendable>(_ seconds: TimeInterval, _ label: String,
+                                         _ op: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await op() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw SideErr.timeout("\(label) timed out after \(Int(seconds))s — will retry later.")
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else {
+                throw SideErr.timeout("\(label) produced no result")
+            }
+            return first
+        }
+    }
+
     @discardableResult
-    static func run(_ tool: String, _ args: [String], cwd: URL? = nil, env: [String: String]? = nil) throws -> String {
+    static func run(_ tool: String, _ args: [String], cwd: URL? = nil, env: [String: String]? = nil,
+                    timeout: TimeInterval = 180) throws -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)
         p.arguments = args
@@ -434,20 +487,27 @@ public struct Sideloader {
         if let env { var e = ProcessInfo.processInfo.environment; env.forEach { e[$0] = $1 }; p.environment = e }
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         try p.run()
+        let watchdog = ProcessWatchdog(p, seconds: timeout)
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
+        watchdog.cancel()
+        if watchdog.fired && p.terminationReason == .uncaughtSignal {
+            throw SideErr.timeout("\((tool as NSString).lastPathComponent) timed out after \(Int(timeout))s — will retry later.")
+        }
         return String(data: data, encoding: .utf8) ?? ""
     }
 
     /// Like run(), but delivers each output line to `onLine` as it arrives (so
     /// progress can be forwarded live). Returns the full combined output.
-    static func runStreaming(_ tool: String, _ args: [String], cwd: URL? = nil, onLine: (String) -> Void) throws -> String {
+    static func runStreaming(_ tool: String, _ args: [String], cwd: URL? = nil,
+                             timeout: TimeInterval = 300, onLine: (String) -> Void) throws -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool); p.arguments = args
         if let cwd { p.currentDirectoryURL = cwd }
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         let h = pipe.fileHandleForReading
         try p.run()
+        let watchdog = ProcessWatchdog(p, seconds: timeout)
         var full = "", buf = ""
         while case let d = h.availableData, !d.isEmpty {
             let s = String(decoding: d, as: UTF8.self); full += s; buf += s
@@ -458,6 +518,10 @@ public struct Sideloader {
         }
         if !buf.isEmpty { onLine(buf) }
         p.waitUntilExit()
+        watchdog.cancel()
+        if watchdog.fired && p.terminationReason == .uncaughtSignal {
+            throw SideErr.timeout("\((tool as NSString).lastPathComponent) timed out after \(Int(timeout))s — will retry later.")
+        }
         return full
     }
 
