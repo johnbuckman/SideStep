@@ -373,6 +373,55 @@ public enum Tracked {
     }
 }
 
+// MARK: - Download progress
+
+/// Session delegate for `Sideloader.downloadFile`: reports byte progress (throttled to
+/// ~10/sec) as the download runs, moves the finished file into place, and resumes the
+/// caller's continuation exactly once. Owns nothing beyond the transfer; the session is
+/// invalidated on completion so it doesn't leak.
+final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let dest: URL
+    private let onProgress: @Sendable (Int64, Int64) -> Void
+    private var cont: CheckedContinuation<Void, Error>?
+    private var lastReport = Date.distantPast
+    private var moveError: Error?
+
+    init(dest: URL, onProgress: @escaping @Sendable (Int64, Int64) -> Void,
+         cont: CheckedContinuation<Void, Error>) {
+        self.dest = dest; self.onProgress = onProgress; self.cont = cont
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        let now = Date()
+        let done = totalBytesExpectedToWrite > 0 && totalBytesWritten >= totalBytesExpectedToWrite
+        guard done || now.timeIntervalSince(lastReport) >= 0.1 else { return }
+        lastReport = now
+        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    // The temp file is deleted the moment this returns, so move it synchronously here.
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            moveError = SideErr.fail("download failed (HTTP \(http.statusCode))"); return
+        }
+        do {
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.moveItem(at: location, to: dest)
+        } catch { moveError = error }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let c = cont; cont = nil
+        session.finishTasksAndInvalidate()
+        if let error = error { c?.resume(throwing: error) }
+        else if let moveError { c?.resume(throwing: moveError) }
+        else { c?.resume() }
+    }
+}
+
 // MARK: - Provision + sign + install
 
 public struct Sideloader {
@@ -546,9 +595,16 @@ public struct Sideloader {
     /// list or the last-seen cache; "your device" if we've never learned a name. Used
     /// in status text so we never mislabel an iPhone as an "iPad" (or vice-versa).
     public static func deviceLabel(_ udid: String) -> String {
-        let n = connectedDevices().first(where: { $0.udid == udid })?.name
-            ?? DeviceIPCache.name(for: udid) ?? ""
-        return n.isEmpty ? "your device" : n
+        // Never surface a UDID as a name — not from the live list, nor from a cache an
+        // older build may have poisoned with the UDID.
+        func realName(_ s: String?) -> String? {
+            guard let s, !s.isEmpty else { return nil }
+            let looksLikeUDID = s.allSatisfy { $0.isHexDigit || $0 == "-" } && (s.count == 40 || (s.count == 25 && s.contains("-")))
+            return looksLikeUDID ? nil : s
+        }
+        let n = realName(connectedDevices().first(where: { $0.udid == udid })?.name)
+            ?? realName(DeviceIPCache.name(for: udid))
+        return n ?? "your device"
     }
 
     /// This Mac's user-visible name, as the user set it in System Settings — via
@@ -613,12 +669,15 @@ public struct Sideloader {
         }
         var seen = Set<String>()
         return out.split(separator: "\n").compactMap { line -> (udid: String, name: String, conn: String)? in
-            let parts = line.split(separator: "\t").map(String.init)
+            // Keep empty columns (omittingEmptySubsequences:false) so an empty name field
+            // doesn't shift the conn value into the name slot.
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
             guard let u = parts.first, isUDID(u), !seen.contains(u) else { return nil }
             seen.insert(u)
-            let name = parts.count > 1 && !parts[1].isEmpty ? parts[1] : u
-            let conn = parts.count > 2 ? parts[2] : "usb"   // older helpers omit the column
-            DeviceIPCache.rememberName(u, name: name)   // so Wi-Fi-only installs can still show a name
+            let raw = parts.count > 1 ? parts[1] : ""
+            let name = (raw.isEmpty || isUDID(raw)) ? "" : raw   // a UDID is not a name
+            let conn = parts.count > 2 && !parts[2].isEmpty ? parts[2] : "usb"  // older helpers omit the column
+            if !name.isEmpty { DeviceIPCache.rememberName(u, name: name) }  // only cache REAL names
             return (u, name, conn)
         }
     }
@@ -644,22 +703,41 @@ public struct Sideloader {
     public static func installSourceApp(account: ALTAccount, session: ALTAppleAPISession,
                                         app: SourceApp, iPadUDID: String,
                                         confirm: @escaping (_ app: String, _ bundleID: String) async -> Bool = { _, _ in true },
-                                        log: @escaping (String) -> Void) async throws -> String {
+                                        log: @escaping (String) -> Void,
+                                        onProgress: @escaping @Sendable (_ received: Int64, _ total: Int64) -> Void = { _, _ in },
+                                        onInstall: @escaping @Sendable (_ percent: Int, _ phase: String) -> Void = { _, _ in }) async throws -> String {
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-dl-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        let appPath = try await downloadAndUnzipApp(app.downloadURL, into: work, log: log)
+        let appPath = try await downloadAndUnzipApp(app.downloadURL, into: work, log: log, onProgress: onProgress)
         return try await install(account: account, session: session, appPath: appPath.path,
-                                 source: app.downloadURL, iPadUDID: iPadUDID, confirm: confirm, log: log)
+                                 source: app.downloadURL, iPadUDID: iPadUDID, confirm: confirm, log: log, onInstall: onInstall)
+    }
+
+    /// Download a file to `dest`, reporting byte progress as it goes. Uses a download
+    /// delegate (not `URLSession.download(from:)`, which reports nothing until it
+    /// finishes) so callers can drive a determinate progress bar + ETA. `onProgress`
+    /// is called with (bytesReceived, bytesExpected); bytesExpected is -1 when the
+    /// server sends no Content-Length.
+    public static func downloadFile(from url: URL, to dest: URL,
+                                    onProgress: @escaping @Sendable (_ received: Int64, _ total: Int64) -> Void) async throws {
+        // Drive the download from a dedicated URLSession whose *session* delegate gets the
+        // progress callbacks. A task-specific delegate on URLSession.shared
+        // (download(from:delegate:)) does NOT reliably deliver didWriteData — which is why
+        // the bar never moved — so we own the session and invalidate it when done.
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            let delegate = DownloadProgressDelegate(dest: dest, onProgress: onProgress, cont: cont)
+            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            session.downloadTask(with: url).resume()
+        }
     }
 
     /// Download an IPA and unzip it, returning the path to the .app inside Payload/.
-    static func downloadAndUnzipApp(_ urlString: String, into work: URL, log: @escaping (String) -> Void) async throws -> URL {
+    static func downloadAndUnzipApp(_ urlString: String, into work: URL, log: @escaping (String) -> Void,
+                                    onProgress: @escaping @Sendable (_ received: Int64, _ total: Int64) -> Void = { _, _ in }) async throws -> URL {
         guard let url = URL(string: urlString) else { throw SideErr.fail("bad download URL") }
         log("Downloading \(url.lastPathComponent)…")
-        let (tmp, _) = try await URLSession.shared.download(from: url)
         let ipa = work.appendingPathComponent("dl.ipa")
-        try? FileManager.default.removeItem(at: ipa)
-        try FileManager.default.moveItem(at: tmp, to: ipa)
+        try await downloadFile(from: url, to: ipa, onProgress: onProgress)
         try run("/usr/bin/unzip", ["-q", ipa.path, "-d", work.path])
         let payload = work.appendingPathComponent("Payload")
         let apps = (try? FileManager.default.contentsOfDirectory(atPath: payload.path)) ?? []
@@ -735,7 +813,8 @@ public struct Sideloader {
                                appPath: String, source: String, iPadUDID: String,
                                github: (repo: String, tag: String)? = nil,
                                confirm: @escaping (_ app: String, _ bundleID: String) async -> Bool = { _, _ in true },
-                               log: @escaping (String) -> Void) async throws -> String {
+                               log: @escaping (String) -> Void,
+                               onInstall: @escaping @Sendable (_ percent: Int, _ phase: String) -> Void = { _, _ in }) async throws -> String {
         // Anti-piracy screening (before any Apple API work, and before we rewrite the
         // bundle id): refuse known pirate sources/files outright; confirm a known paid app.
         switch Blocklist.shared.screen(appPath: appPath, origin: source) {
@@ -872,9 +951,22 @@ public struct Sideloader {
         // last IP we learned from this device's beacon — lets a Wi-Fi-only device refresh
         // on demand, not only when it beacons.
         let targetIP = envIP ?? DeviceIPCache.ip(for: iPadUDID)
+        // The helper streams `>>> PROGRESS <pct> <phase>` while it copies the IPA to the
+        // device and while installation_proxy installs it — route those to the progress
+        // bar and everything else to the normal log.
+        func installLine(_ line: String) {
+            if line.hasPrefix(">>> PROGRESS ") {
+                let rest = line.dropFirst(">>> PROGRESS ".count)
+                let parts = rest.split(separator: " ", maxSplits: 1)
+                if let pct = parts.first.flatMap({ Int($0) }) {
+                    onInstall(pct, parts.count > 1 ? String(parts[1]) : "Installing")
+                }
+            } else {
+                log(line)
+            }
+        }
         func usbInstall() throws {
-            let r = try run(helperPath(), ["install", iPadUDID, ipa.path], cwd: work)
-            log("install: \(r.split(separator: "\n").last.map(String.init) ?? r)")
+            let r = try runStreaming(helperPath(), ["install", iPadUDID, ipa.path], cwd: work, onLine: installLine)
             guard r.contains("INSTALL OK") else { throw SideErr.fail("install failed: \(r.suffix(160))") }
         }
         if conn == "usb" {
@@ -884,7 +976,7 @@ public struct Sideloader {
             // Direct-IP install: connect straight to the device's IP (beacon-supplied or
             // remembered), bypassing usbmux's flaky Bonjour discovery.
             log("Installing by direct IP \(ip)…")
-            let ipOut = try runStreaming(ipInstallPath(), [iPadUDID, ip, ipa.path], cwd: work, onLine: { log($0) })
+            let ipOut = try runStreaming(ipInstallPath(), [iPadUDID, ip, ipa.path], cwd: work, onLine: installLine)
             if !ipOut.contains("DIRECT-IP INSTALL OK") {
                 if connectedDevices().contains(where: { $0.udid == iPadUDID }) {
                     // Still reachable via usbmux (cable, or Wi-Fi-listed) — let it route.
@@ -945,9 +1037,10 @@ public struct Sideloader {
                                       filePath: String, iPadUDID: String,
                                       github: (repo: String, tag: String)? = nil,
                                       confirm: @escaping (_ app: String, _ bundleID: String) async -> Bool = { _, _ in true },
-                                      log: @escaping (String) -> Void) async throws -> String {
+                                      log: @escaping (String) -> Void,
+                                      onInstall: @escaping @Sendable (_ percent: Int, _ phase: String) -> Void = { _, _ in }) async throws -> String {
         if filePath.hasSuffix(".app") {
-            return try await install(account: account, session: session, appPath: filePath, source: filePath, iPadUDID: iPadUDID, github: github, confirm: confirm, log: log)
+            return try await install(account: account, session: session, appPath: filePath, source: filePath, iPadUDID: iPadUDID, github: github, confirm: confirm, log: log, onInstall: onInstall)
         }
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-ipa-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -957,7 +1050,7 @@ public struct Sideloader {
         guard let appName = apps.first(where: { $0.hasSuffix(".app") }) else { throw SideErr.fail("no .app inside the IPA") }
         return try await install(account: account, session: session,
                                  appPath: payload.appendingPathComponent(appName).path,
-                                 source: filePath, iPadUDID: iPadUDID, github: github, confirm: confirm, log: log)
+                                 source: filePath, iPadUDID: iPadUDID, github: github, confirm: confirm, log: log, onInstall: onInstall)
     }
 
     /// Install the newest `.ipa` from a GitHub repo's releases, remembering the repo
@@ -965,10 +1058,11 @@ public struct Sideloader {
     @discardableResult
     public static func installFromGitHub(account: ALTAccount, session: ALTAppleAPISession,
                                          repo: String, iPadUDID: String,
-                                         log: @escaping (String) -> Void) async throws -> String {
+                                         log: @escaping (String) -> Void,
+                                         onProgress: @escaping @Sendable (_ received: Int64, _ total: Int64) -> Void = { _, _ in }) async throws -> String {
         guard let rel = await GitHub.latestIPA(repo: repo) else { throw SideErr.fail("no .ipa release found in \(repo)") }
         log("GitHub: \(repo) latest is \(rel.tag) (\(rel.ipaName)) — downloading…")
-        let ipa = try await GitHub.downloadIPA(rel)
+        let ipa = try await GitHub.downloadIPA(rel, onProgress: onProgress)
         defer { try? FileManager.default.removeItem(atPath: ipa) }
         return try await installFromIPA(account: account, session: session, filePath: ipa,
                                         iPadUDID: iPadUDID, github: (repo, rel.tag), log: log)

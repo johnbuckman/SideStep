@@ -156,6 +156,11 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var ipDone = false          // terminal state reached
     @Published var ipOK = false            // terminal outcome (success/failure)
     @Published var ipResult = ""           // final message shown alongside the OK button
+    @Published var ipProgress: Double?     // fraction 0…1 (nil = indeterminate/spinner)
+    @Published var ipDetail = ""           // "42% · 3.1 MB of 7.4 MB · ~8s left"
+    private var dlStart: Date?             // when the current download began (for ETA)
+    private var phaseStart: Date?          // when the current install sub-phase began (for ETA)
+    private var phaseKey = ""              // current install sub-phase ("Uploading"/"Installing")
     @Published var launchAtLogin = (SMAppService.mainApp.status == .enabled)
     @Published var sourceURL = ""
     @Published var sourceApps: [SourceApp] = []
@@ -574,8 +579,65 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     // MARK: install progress/result window
     private var installProgressWindow: NSWindow?
     /// Open (or reuse) the install-progress window and reset it to a running state.
+    /// Feed byte counts from a running download into the progress window: a determinate
+    /// fraction when the server sent a Content-Length, plus a human "42% · 3.1 MB of
+    /// 7.4 MB · ~8s left" line. Times the download from its first callback to estimate
+    /// the ETA (smoothed by the overall average rate, which is stable enough here).
+    @MainActor
+    func reportDownload(received: Int64, total: Int64) {
+        if dlStart == nil { dlStart = Date() }
+        let got = ByteCountFormatter.string(fromByteCount: received, countStyle: .file)
+        guard total > 0 else {                       // no Content-Length: keep the spinner, show bytes so far
+            ipProgress = nil
+            ipDetail = "\(got) downloaded"
+            return
+        }
+        let frac = min(1.0, Double(received) / Double(total))
+        ipProgress = frac
+        let tot = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+        var eta = ""
+        let elapsed = Date().timeIntervalSince(dlStart ?? Date())
+        if elapsed > 0.5, received > 0, received < total {
+            let rate = Double(received) / elapsed     // bytes/sec, averaged over the whole download
+            if rate > 0 { eta = " · \(Self.formatETA(Double(total - received) / rate)) left" }
+        }
+        ipDetail = "\(Int(frac * 100))% · \(got) of \(tot)\(eta)"
+    }
+
+    /// Progress for the on-device step: the helper streams a percentage first as it
+    /// copies the IPA to the device ("Uploading"), then as installation_proxy installs it
+    /// ("Installing"). Each sub-phase gets its own ETA clock, so the estimate restarts
+    /// cleanly at the hand-off instead of lurching.
+    @MainActor
+    func reportInstallProgress(percent: Int, phase: String) {
+        let pct = max(0, min(100, percent))
+        if phaseKey != phase { phaseKey = phase; phaseStart = Date() }
+        ipProgress = Double(pct) / 100
+        ipStatus = phase == "Uploading" ? "Copying to device…" : "Installing on device…"
+        var eta = ""
+        let elapsed = Date().timeIntervalSince(phaseStart ?? Date())
+        if elapsed > 0.5, pct > 1, pct < 100 {
+            let totalTime = elapsed / (Double(pct) / 100)   // project total from average rate
+            eta = " · \(Self.formatETA(totalTime - elapsed)) left"
+        }
+        ipDetail = "\(pct)%\(eta)"
+    }
+
+    /// Drop the determinate bar back to the spinner once a phase hands off to work that
+    /// reports no progress (signing, provisioning).
+    @MainActor
+    func clearDownloadProgress() { ipProgress = nil; ipDetail = ""; dlStart = nil; phaseStart = nil; phaseKey = "" }
+
+    static func formatETA(_ seconds: Double) -> String {
+        if seconds < 1 { return "~1s" }
+        if seconds < 60 { return "~\(Int(seconds.rounded()))s" }
+        let m = Int(seconds) / 60, s = Int(seconds) % 60
+        return s == 0 ? "~\(m)m" : "~\(m)m \(s)s"
+    }
+
     func beginInstallProgress(title: String) {
         ipTitle = title; ipStatus = "Starting…"; ipDone = false; ipOK = false; ipResult = ""
+        clearDownloadProgress()
         if let w = installProgressWindow { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
         // Drive the window from an NSHostingController so AppKit sizes it to the SwiftUI
         // content and re-fits automatically when the result text grows — the old manual
@@ -592,6 +654,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     /// Mark the install finished with an outcome; the window shows it + an OK button.
     func finishInstallProgress(ok: Bool, message: String) {
         ipDone = true; ipOK = ok
+        clearDownloadProgress()
         // The result view already shows a green check icon on success, so drop the
         // leading "✅ " from the message (otherwise the user sees two green checks).
         var text = message
@@ -658,7 +721,21 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             let log: @Sendable (String) -> Void = { msg in
                 print("[SideStep] \(msg)")
                 let line = String(msg.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "")
-                Task { @MainActor in self.status = line; if !line.isEmpty { self.ipStatus = line } }
+                Task { @MainActor in
+                    self.status = line
+                    if !line.isEmpty { self.ipStatus = line }
+                    // Any non-download status (signing, provisioning, installing) means the
+                    // download is done — swap the determinate bar back for the spinner.
+                    if !line.contains("Downloading") { self.clearDownloadProgress() }
+                }
+            }
+            // Live byte progress → determinate bar + ETA in the install window.
+            let onProgress: @Sendable (Int64, Int64) -> Void = { received, total in
+                Task { @MainActor in self.reportDownload(received: received, total: total) }
+            }
+            // Live on-device progress (copy to device, then install) → same bar + ETA.
+            let onInstall: @Sendable (Int, String) -> Void = { percent, phase in
+                Task { @MainActor in self.reportInstallProgress(percent: percent, phase: phase) }
             }
             // Shown only when an app to be installed looks like a known PAID App Store
             // app — a legitimate owner can proceed; the default (Cancel) refuses.
@@ -677,8 +754,8 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             do {
                 let result: String
                 switch kind {
-                case .ipa(let path): result = try await Sideloader.installFromIPA(account: account, session: session, filePath: path, iPadUDID: udid, github: gh, confirm: confirm, log: log)
-                case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, confirm: confirm, log: log)
+                case .ipa(let path): result = try await Sideloader.installFromIPA(account: account, session: session, filePath: path, iPadUDID: udid, github: gh, confirm: confirm, log: log, onInstall: onInstall)
+                case .source(let app): result = try await Sideloader.installSourceApp(account: account, session: session, app: app, iPadUDID: udid, confirm: confirm, log: log, onProgress: onProgress, onInstall: onInstall)
                 }
                 dlog("execute: install SUCCEEDED — \(result)")
                 await MainActor.run { self.status = result; self.finishInstallProgress(ok: true, message: result); self.maybeShowTrustHint(appleID: account.appleID) }
@@ -791,8 +868,16 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         Task { @MainActor in
             guard let rel = await GitHub.latestIPA(repo: repo) else { self.status = "No .ipa release found in \(repo)."; return }
             self.status = "Downloading \(rel.ipaName) (\(rel.tag))…"
+            let name = rel.ipaName
+            let onProgress: @Sendable (Int64, Int64) -> Void = { received, total in
+                Task { @MainActor in
+                    guard total > 0 else { return }
+                    let pct = Int(min(1.0, Double(received) / Double(total)) * 100)
+                    self.status = "Downloading \(name)… \(pct)%"
+                }
+            }
             do {
-                let ipa = try await GitHub.downloadIPA(rel)
+                let ipa = try await GitHub.downloadIPA(rel, onProgress: onProgress)
                 self.pendingGithub = (repo, rel.tag)   // consumed by execute(), stamped onto the tracked app
                 self.openIPA(ipa)                      // normal inspect → device picker → install flow
             } catch { self.status = "Download failed: \(error.localizedDescription)" }
@@ -1451,11 +1536,27 @@ struct InstallProgressView: View {
                     Text(m.ipResult.isEmpty ? (m.ipOK ? "Installed." : "Install failed.") : m.ipResult)
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
-            } else {
-                HStack(spacing: 10) {
-                    ProgressView().scaleEffect(0.7).frame(width: 16, height: 16)
+            } else if let p = m.ipProgress {
+                // Determinate download: a real bar with % · size · ETA underneath.
+                VStack(alignment: .leading, spacing: 6) {
                     Text(m.ipStatus).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    ProgressView(value: p).progressViewStyle(.linear)
+                    if !m.ipDetail.isEmpty {
+                        Text(m.ipDetail).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        ProgressView().scaleEffect(0.7).frame(width: 16, height: 16)
+                        Text(m.ipStatus).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    // Downloads with no Content-Length can't show a bar; still surface bytes-so-far.
+                    if !m.ipDetail.isEmpty {
+                        Text(m.ipDetail).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    }
                 }
             }
             HStack {

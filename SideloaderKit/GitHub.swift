@@ -142,13 +142,13 @@ public enum GitHub {
         return nil
     }
 
-    /// Download an `.ipa` to a temp file; returns its local path.
-    public static func downloadIPA(_ rel: IPARelease) async throws -> String {
-        let (tmp, _) = try await URLSession.shared.download(from: rel.ipaURL)
+    /// Download an `.ipa` to a temp file; returns its local path. `onProgress` reports
+    /// (bytesReceived, bytesExpected) so the caller can show a % bar + ETA.
+    public static func downloadIPA(_ rel: IPARelease,
+                                   onProgress: @escaping @Sendable (_ received: Int64, _ total: Int64) -> Void = { _, _ in }) async throws -> String {
         let safe = rel.ipaName.replacingOccurrences(of: "/", with: "_")
         let dest = FileManager.default.temporaryDirectory.appendingPathComponent("gh-\(UUID().uuidString)-\(safe)")
-        try? FileManager.default.removeItem(at: dest)
-        try FileManager.default.moveItem(at: tmp, to: dest)
+        try await Sideloader.downloadFile(from: rel.ipaURL, to: dest, onProgress: onProgress)
         return dest.path
     }
 

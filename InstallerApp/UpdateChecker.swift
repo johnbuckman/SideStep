@@ -157,10 +157,12 @@ final class UpdateChecker {
         let work = NSTemporaryDirectory() + "sidestep-update-\(UUID().uuidString)"
         try? fm.createDirectory(atPath: work, withIntermediateDirectories: true)
 
-        guard let (tmp, _) = try? await URLSession.shared.download(from: assetURL) else { return nil }
         let isDMG = assetURL.pathExtension.lowercased() == "dmg"
         let assetPath = work + "/asset." + (isDMG ? "dmg" : "zip")
-        try? fm.moveItem(atPath: tmp.path, toPath: assetPath)
+        // Self-update runs without a live progress window, so there's nowhere to show a
+        // bar here — but route through the shared helper for consistent HTTP handling.
+        guard (try? await Sideloader.downloadFile(from: assetURL, to: URL(fileURLWithPath: assetPath),
+                                                  onProgress: { _, _ in })) != nil else { return nil }
 
         let extractDir = work + "/x"
         try? fm.createDirectory(atPath: extractDir, withIntermediateDirectories: true)
