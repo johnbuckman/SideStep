@@ -22,6 +22,12 @@ static void status_cb(plist_t command, plist_t status, void *udata) {
         snprintf(g_errmsg, sizeof(g_errmsg), "%s%s%s", nm, ds ? ": " : "", ds ? ds : "");
     }
     free(nm); free(ds);
+    // installation_proxy reports 0…100 as it copies/verifies/installs on-device. Emit it
+    // on its own PROGRESS line (parsed by the Mac side) so we can show a bar + ETA for the
+    // "Installing on iPad…" phase, which used to be a bare spinner.
+    int pct = -1;
+    instproxy_status_get_percent_complete(status, &pct);
+    if (pct >= 0) { printf(">>> PROGRESS %d Installing\n", pct); fflush(stdout); }
 }
 
 static idevice_t connect_dev(const char *udid) {
@@ -60,7 +66,10 @@ static int cmd_list(void) {
             }
             lockdownd_client_free(ld);
         }
-        printf("%s\t%s\t%s\n", udid, name ? name : udid, conn);
+        // Leave the name column EMPTY when lockdown wouldn't give us DeviceName (e.g. a
+        // Wi-Fi device that isn't trust-paired right now) — never echo the UDID as a
+        // name, or the UI ends up showing a 40-hex blob instead of "iPad".
+        printf("%s\t%s\t%s\n", udid, name ? name : "", conn);
         free(name);
         if (d) idevice_free(d);
     }
@@ -105,6 +114,10 @@ static int cmd_install(const char *udid, const char *ipa) {
     }
     FILE *f = fopen(ipa, "rb");
     if (!f) { printf(">>> INSTALL FAILED: cannot read ipa\n"); return 2; }
+    // Total size so we can report upload progress (the AFC copy is often the slow part).
+    long long total = 0;
+    if (fseek(f, 0, SEEK_END) == 0) { total = ftello(f); fseek(f, 0, SEEK_SET); }
+    long long uploaded = 0; int last_pct = -1;
     char buf[131072]; size_t r;
     while ((r = fread(buf, 1, sizeof(buf), f)) > 0) {
         uint32_t off = 0;
@@ -114,6 +127,11 @@ static int cmd_install(const char *udid, const char *ipa) {
                 fclose(f); printf(">>> INSTALL FAILED: afc write\n"); return 2;
             }
             off += wr;
+        }
+        uploaded += (long long)r;
+        if (total > 0) {
+            int pct = (int)(uploaded * 100 / total);
+            if (pct != last_pct) { last_pct = pct; printf(">>> PROGRESS %d Uploading\n", pct); fflush(stdout); }
         }
     }
     fclose(f);
