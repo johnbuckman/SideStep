@@ -1122,6 +1122,11 @@ static void startLocalNetworkActivity(void) {
 // a first run, show the explainer → Next → system prompt → run on grant. On refusal,
 // the probe shows the nag and `then` is not run (we prompt instead of silently failing).
 static void ensureLocalNetReady(void (^then)(void)) {
+    // If access was granted on a prior run, g_lnReady may have been seeded to YES at
+    // launch (so foreground handlers beacon right away) before any networking began.
+    // Make sure discovery + the readiness/denial probe are actually running this launch.
+    if (!g_localNetStarted && [NSUserDefaults.standardUserDefaults boolForKey:kLNGranted])
+        startLocalNetworkActivity();
     if (g_lnReady) { if (then) then(); return; }
     void (^prev)(void) = g_onLNReady;
     g_onLNReady = ^{ if (prev) prev(); if (then) then(); };   // chain, so multiple waiters all run
@@ -1204,6 +1209,16 @@ static void requestNotificationsThenLocalNet(void) {
 static void onLaunch(void) {
     clearPendingIfApplied();          // did a relaunch just apply a staged update?
     beaconLog(@"app launched");
+    // Remember Local Network access across launches. g_lnReady is a fresh NO each
+    // process start, so without this the foreground / became-active handlers log
+    // "Local Network not granted yet, not beaconing" on every launch even though it
+    // was granted on a prior run. Seed it from the persisted grant so we beacon
+    // immediately; the readiness/denial probe still runs (via ensureLocalNetReady)
+    // to catch a genuine revocation.
+    if ([NSUserDefaults.standardUserDefaults boolForKey:kLNGranted]) {
+        g_lnReady = YES;
+        beaconLog(@"Local Network access remembered from a previous run");
+    }
     if (@available(iOS 13.0, *)) {
         [BGTaskScheduler.sharedScheduler registerForTaskWithIdentifier:BG_TASK_ID usingQueue:nil
             launchHandler:^(BGTask *task) {
