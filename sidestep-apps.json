@@ -47,6 +47,20 @@
       ]
     },
     {
+      "name": "de1app",
+      "bundleIdentifier": "com.decent.de1app",
+      "developerName": "Decent Espresso",
+      "localizedDescription": "The original Decent Espresso machine controller app (de1app) for iPad, now sideloadable with your own Apple ID. Runs on Tcl/Tk via iWish; self-updates in place. Being gradually succeeded by Decaid.",
+      "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/de1app-icon.png",
+      "versions": [
+        {
+          "version": "1.46.1.156",
+          "downloadURL": "https://github.com/decentespresso/de1app/releases/download/v1.46.1.156/de1app-ios.ipa",
+          "size": 119509968
+        }
+      ]
+    },
+    {
       "name": "Decent Timer",
       "bundleIdentifier": "com.decentespresso.kitchentimer",
       "developerName": "John Buckman",
