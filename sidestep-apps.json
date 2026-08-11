@@ -5,6 +5,20 @@
   "_comment": "SideStep's own curated list of legitimate, sideloadable iOS apps distributed as .ipa files. Published as a GitHub release asset (tag 'apps'); the URL above is always the latest. Icons are hosted alongside as release assets. To propose an app, send a pull request updating this file in johnbuckman/SideStep.",
   "apps": [
     {
+      "name": "Stay on Track",
+      "bundleIdentifier": "com.johnbuckman.stayontrack",
+      "developerName": "John Buckman",
+      "localizedDescription": "A fully-offline hiking companion that keeps you on your intended trail — a British voice calls out \"Left / Right / Straight\" at every trail junction where another path joins, a rising tone warns when you stray off-trail, and OpenStreetMap maps work in airplane mode. Requires iOS 17.",
+      "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/stayontrack-icon.png",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v0.1.0/StayOnTrack.ipa",
+          "size": 3496532
+        }
+      ]
+    },
+    {
       "name": "Magnatune",
       "bundleIdentifier": "com.magnatune.player",
       "developerName": "Magnatune",
