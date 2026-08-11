@@ -11,6 +11,10 @@ TOKEN_FILE="$REPO/regression/beacon-token.txt"   # gitignored; shared with the o
 # Pin the device helpers to the repo's freshly-built copies so the headless CLI can never
 # fall back to a stale helper (the exact trap that produced a false "INSTALL OK").
 export SIDESTEP_HELPER_DIR="$REPO/Helpers/idevice"
+# Enable the beacon debug/control channel for the suite's installs. Presence of this token
+# is the build flag: BeaconInjector bakes the channel into an install ONLY when it's set, so
+# every test app is drivable while release/GUI installs ship no debug surface at all.
+[ -f "$TOKEN_FILE" ] && export SIDESTEP_BEACON_TOKEN="$(cat "$TOKEN_FILE")"
 
 # Build the Provision CLI if it's missing/stale. Returns non-zero if the build fails.
 ensure_provision() {
