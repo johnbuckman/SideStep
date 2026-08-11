@@ -67,7 +67,7 @@ final class UpdateChecker {
         var req = URLRequest(url: releasesAPI)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("SideStep", forHTTPHeaderField: "User-Agent")
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
+        guard let (data, _) = try? await Net.api.data(for: req),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
               let first = arr.first,                                   // releases are newest-first
               let tag = first["tag_name"] as? String,
@@ -82,21 +82,10 @@ final class UpdateChecker {
         return Release(tag: tag, name: (first["name"] as? String) ?? tag, assetURL: url)
     }
 
-    /// Compare version tags like "v0.2-beta": numeric parts first, then prerelease
-    /// rank (alpha < beta < rc < release). Compared against CFBundleShortVersionString,
-    /// which the build sets to the tag's version (e.g. "0.1-beta").
+    /// Compare version tags like "v0.2-beta". Logic lives in SideloaderKit.VersionCompare
+    /// so it can be unit-tested without the GUI target.
     func isNewer(_ latest: String, than current: String) -> Bool {
-        key(current).lexicographicallyPrecedes(key(latest))
-    }
-
-    private func key(_ tag: String) -> [Int] {
-        var s = tag.lowercased()
-        if s.hasPrefix("v") { s.removeFirst() }
-        let rank = s.contains("alpha") ? 0 : s.contains("beta") ? 1 : (s.contains("rc") ? 2 : 3)
-        let main = s.split(separator: "-").first.map(String.init) ?? s
-        var nums = main.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
-        while nums.count < 3 { nums.append(0) }
-        return Array(nums.prefix(3)) + [rank]
+        VersionCompare.isNewer(latest, than: current)
     }
 
     // MARK: - Prompt

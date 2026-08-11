@@ -3,9 +3,14 @@
 #   ./bundle-app.sh [output-dir]     default output: /Applications/SideStep.app
 set -e
 cd "$(dirname "$0")"
-# Version comes from VERSION.txt (same source as notarize-build.sh), so a local
-# test build shows the same number the in-app updater compares against.
-SHORT_VERSION="$(tr -d ' \n' < VERSION.txt)"
+# Version comes from VERSION.txt (same source as notarize-build.sh). Auto-bump the
+# patch on every local build so each build gets a distinct, higher number — you can
+# tell at a glance whether the running app is the one you just built.
+CUR="$(tr -d ' \n' < VERSION.txt)"
+MAJ="${CUR%.*.*}"; REST="${CUR#*.}"; MIN="${REST%.*}"; PATCH="${REST#*.}"
+SHORT_VERSION="${MAJ}.${MIN}.$((PATCH + 1))"
+printf '%s' "$SHORT_VERSION" > VERSION.txt
+echo "version: $CUR → $SHORT_VERSION"
 # Force a relink: swift build sometimes recompiles a changed module but skips
 # relinking the executable, which silently bundles a stale binary.
 rm -f "$(swift build --show-bin-path)/InstallerApp"

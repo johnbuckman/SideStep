@@ -45,6 +45,13 @@ static volatile int g_hb_run = 1;
 static void* hb_thread(void* a){
     (void)a;
     while (g_hb_run) {
+        // Parent-death guard: if SideStep (our parent) quits, crashes, or is force-
+        // killed mid-install, this process is reparented to launchd (ppid==1). Left
+        // alive it keeps answering the device heartbeat and holds the AFC/instproxy
+        // session open, wedging the NEXT SideStep session's install of this device.
+        // macOS has no PDEATHSIG, so poll ppid here (loop runs every ≤15s / 200ms) and
+        // self-exit promptly when orphaned, releasing the device.
+        if (getppid() == 1) _exit(1);
         plist_t ping = NULL;
         if (heartbeat_receive_with_timeout(g_hb, &ping, 15000) != 0) { usleep(200000); continue; }
         plist_t polo = plist_new_dict();

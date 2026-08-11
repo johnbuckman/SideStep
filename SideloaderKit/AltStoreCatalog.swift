@@ -19,7 +19,7 @@ public enum AltStoreCatalog {
     // MARK: - source URL management
 
     static func remoteDefaults() async -> [String] {
-        if let u = URL(string: listURL), let (d, _) = try? await URLSession.shared.data(from: u),
+        if let u = URL(string: listURL), let (d, _) = try? await Net.api.data(from: u),
            let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
            let arr = obj["sources"] as? [String], !arr.isEmpty { return arr }
         return fallback
@@ -74,7 +74,7 @@ public enum AltStoreCatalog {
         return list
     }
     static func fetchOne(_ urlString: String) async -> [SourceApp] {
-        guard let u = URL(string: urlString), let (d, _) = try? await URLSession.shared.data(from: u),
+        guard let u = URL(string: urlString), let (d, _) = try? await Net.api.data(from: u),
               let src = try? JSONDecoder().decode(AltSource.self, from: d) else { return [] }
         let sname = src.name ?? ""
         let sweb = src.website ?? ""

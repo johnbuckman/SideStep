@@ -311,6 +311,11 @@ device tools (a small [libimobiledevice](https://github.com/libimobiledevice/lib
 helper in [`Helpers/idevice`](Helpers)) ship inside the app, so it's self-contained
 — no Python or external tools required at runtime.
 
+**Regression tests:** `./regression/regress.sh` runs an automated suite that verifies
+installs actually land, uninstalls remove, versions match, extensions install, App IDs
+are reused, and the on-device beacon responds — asserted against the device itself, not
+SideStep's own success message. See [`docs/REGRESSION-TESTS.md`](docs/REGRESSION-TESTS.md).
+
 Contributing, or an AI agent picking up the project? Start with
 [`docs/AI-BOOTSTRAP.md`](docs/AI-BOOTSTRAP.md), then
 [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).

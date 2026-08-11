@@ -24,6 +24,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <string.h>
@@ -48,6 +49,10 @@ static BOOL      g_autoUpdates = NO;        // YES = SideStep pushes new version
 static NSDate   *g_lastBeaconAt = nil;
 static int       g_beaconCount = 0;
 static NSString *g_lastReason = @"(none yet)";
+static int       g_debugPort  = 0;          // 0 = off; INBOUND TCP debug port (Mac→device, best-effort)
+static int       g_ctrlPort   = 0;          // 0 = off; OUTBOUND control port the beacon dials on the Mac
+static NSString *g_debugToken = @"";        // shared secret required by the debug/control channel
+static void (^g_pendingNext)(void) = nil;   // the active "Next" button action (drivable from the port)
 static BOOL      g_localNetStarted = NO;    // gate: local-network access (and its prompt) has begun
 static BOOL      g_lnNagShown = NO;         // Local Network refusal card already shown once
 static BOOL      g_lnReady = NO;            // Local Network access confirmed granted (probe ready)
@@ -69,6 +74,9 @@ static void loadConfig(void) {
     if (c[@"foreground_check"])g_fgSec = [c[@"foreground_check"] intValue];
     if (c[@"found_via"])       g_foundVia = c[@"found_via"];
     if (c[@"auto_updates"])    g_autoUpdates = [c[@"auto_updates"] boolValue];
+    if (c[@"debug_port"])         g_debugPort = [c[@"debug_port"] intValue];
+    if (c[@"debug_connect_port"]) g_ctrlPort = [c[@"debug_connect_port"] intValue];
+    if (c[@"debug_token"])        g_debugToken = c[@"debug_token"];
     if (g_bundle.length == 0)  g_bundle = NSBundle.mainBundle.bundleIdentifier ?: @"";
 }
 
@@ -222,7 +230,7 @@ static void sendBeacon(void) {   // fire-and-forget (automatic path, no UI)
 
 // Beacon and then listen (~4 min) for the Mac's STATUS / PROGRESS replies on the
 // same socket. onStatus + onProgress are dispatched to the main thread.
-static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int pct, int eta)) {
+static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int pct, int eta), void (^onNow)(NSString *)) {
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     if (s < 0) { return; }
     int on = 1; setsockopt(s, SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
@@ -257,6 +265,10 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
             } else if (strncmp(buf, "EXPIRES ", 8) == 0) {
                 sawAny = YES;   // new signing valid until — the update is staged, pending our exit
                 markUpdatePending([[NSString stringWithUTF8String:buf + 8] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
+            } else if (strncmp(buf, "NOW ", 4) == 0) {
+                sawAny = YES;   // fine-grained current-action detail for the "Now: …" line
+                NSString *d = [[NSString stringWithUTF8String:buf + 4] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                dispatch_async(dispatch_get_main_queue(), ^{ if (onNow) onNow(d); });
             }
         } else if (!sawAny && -start.timeIntervalSinceNow > 12) {
             if (!noReplyRecorded) { recordResult(@"No reply — is SideStep running on your Mac?", NO); beaconLog(@"no reply from Mac (asleep/off, or not same Wi-Fi)"); noReplyRecorded = YES; }
@@ -478,38 +490,24 @@ static NSString *vitalsText(void) {
     return [NSString stringWithFormat:@"%@%@\n\n%@", pendingBanner(), body, logText()];
 }
 
-// Fires only when TWO fingers are held simultaneously in ANY two of the four
-// corners (top-left, top-right, bottom-left, bottom-right) — for 1.5s. A
-// two-hand, location-locked hold that cannot occur by accident and collides with
-// no iPad system gesture.
-@interface CornerHoldRecognizer : UIGestureRecognizer @end
-@implementation CornerHoldRecognizer { NSTimer *_t; }
-- (BOOL)cornersHeld {
-    UIView *v = self.view;
-    if (!v || self.numberOfTouches != 2) return NO;
-    CGFloat W = v.bounds.size.width, H = v.bounds.size.height, C = 140;
-    BOOL tl = NO, tr = NO, bl = NO, br = NO;
+// The hidden diagnostic gesture: two fingers held for 1.5s in ANY two of the four screen
+// corners. Implemented as a WINDOW-level UILongPressGestureRecognizer (see -attach), NOT an
+// overlay: requiring 2 touches means a ONE-finger touch never engages it, so single-finger
+// drags (e.g. panning a full-screen map from a corner) flow straight through untouched. It's
+// movement-tolerant + set to recognize simultaneously, so a map's own pan/pinch can't
+// pre-empt it; we confirm both fingers are actually in corners at the moment it fires.
+static BOOL twoFingersInCorners(UIGestureRecognizer *g) {
+    UIView *v = g.view;
+    if (!v || g.numberOfTouches != 2) return NO;
+    CGFloat W = v.bounds.size.width, H = v.bounds.size.height, C = 150;
+    int corners = 0;
     for (NSUInteger i = 0; i < 2; i++) {
-        CGPoint p = [self locationOfTouch:i inView:v];
+        CGPoint p = [g locationOfTouch:i inView:v];
         BOOL top = p.y <= C, bottom = p.y >= H - C, left = p.x <= C, right = p.x >= W - C;
-        if      (top && left)  tl = YES;
-        else if (top && right) tr = YES;
-        else if (bottom && left)  bl = YES;
-        else if (bottom && right) br = YES;
+        if ((top || bottom) && (left || right)) corners++;
     }
-    // Two touches occupying two DISTINCT corners → any pair of the four corners.
-    return (tl + tr + bl + br) >= 2;
+    return corners == 2;
 }
-- (void)cancelTimer { [_t invalidate]; _t = nil; }
-- (void)fire { self.state = [self cornersHeld] ? UIGestureRecognizerStateRecognized : UIGestureRecognizerStateFailed; }
-- (void)touchesBegan:(NSSet<UITouch *> *)t withEvent:(UIEvent *)e {
-    if ([self cornersHeld] && !_t) _t = [NSTimer scheduledTimerWithTimeInterval:1.5 target:self selector:@selector(fire) userInfo:nil repeats:NO];
-}
-- (void)touchesMoved:(NSSet<UITouch *> *)t withEvent:(UIEvent *)e { if (![self cornersHeld]) [self cancelTimer]; }
-- (void)touchesEnded:(NSSet<UITouch *> *)t withEvent:(UIEvent *)e { [self cancelTimer]; if (self.state == UIGestureRecognizerStatePossible) self.state = UIGestureRecognizerStateFailed; }
-- (void)touchesCancelled:(NSSet<UITouch *> *)t withEvent:(UIEvent *)e { [self cancelTimer]; self.state = UIGestureRecognizerStateCancelled; }
-- (void)reset { [self cancelTimer]; [super reset]; }
-@end
 
 // ---------- "Install more apps…" — talk to SideStep's TCP install server ----------
 static const uint16_t kInstallPort = 51235;
@@ -589,13 +587,14 @@ static void tcpStream(NSString *ip, NSString *req, void (^onLine)(NSString *)) {
 - (void)done { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
 
-@interface BeaconVitals : NSObject
+@interface BeaconVitals : NSObject <UIGestureRecognizerDelegate>
 @property(nonatomic, weak) UIView *overlay;
 @property(nonatomic, weak) UILabel *label;
 @property(nonatomic, weak) UIView *updatingCard;
 @property(nonatomic, weak) UILabel *statusLabel;
 @property(nonatomic, weak) UIProgressView *progressView;
 @property(nonatomic, weak) UILabel *pctLabel;
+@property(nonatomic, weak) UILabel *nowLabel;   // fine-grained "Now: …" line above Hide
 @property(nonatomic, assign) BOOL exiting;
 @end
 @implementation BeaconVitals
@@ -609,11 +608,20 @@ static void tcpStream(NSString *ip, NSString *req, void (^onLine)(NSString *)) {
 - (void)attach {
     UIWindow *w = [self keyWindow]; if (!w) return;
     for (UIGestureRecognizer *g in w.gestureRecognizers) if ([g.name isEqualToString:@"beaconVitals"]) return;
-    CornerHoldRecognizer *r = [[CornerHoldRecognizer alloc] initWithTarget:self action:@selector(trigger:)];
-    r.name = @"beaconVitals"; r.cancelsTouchesInView = NO; r.delaysTouchesBegan = NO;
+    UILongPressGestureRecognizer *r = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(cornerLongPress:)];
+    r.name = @"beaconVitals";
+    r.numberOfTouchesRequired = 2;     // one-finger touches never engage it → map drags unaffected
+    r.minimumPressDuration = 1.5;
+    r.allowableMovement = 10000;       // don't cancel on map jitter; we validate corners when it fires
+    r.cancelsTouchesInView = NO; r.delaysTouchesBegan = NO;
+    r.delegate = self;                 // recognize alongside a map's pan/pinch so it can't pre-empt us
     [w addGestureRecognizer:r];
 }
-- (void)trigger:(UIGestureRecognizer *)g { if (g.state == UIGestureRecognizerStateRecognized && !self.overlay) [self show]; }
+// Fire even while the app's own recognizers (e.g. a full-screen map's pan/pinch) are active.
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)g shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)o { return YES; }
+- (void)cornerLongPress:(UILongPressGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan && twoFingersInCorners(g) && !self.overlay) [self show];
+}
 static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:title forState:UIControlStateNormal];
@@ -857,7 +865,7 @@ static NSString *fmtEta(int s) {
     CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
     // ~50% wider than the old 480pt, but never wider than the screen allows, so
     // the status text stops wrapping unless the device genuinely can't fit it.
-    CGFloat cardW = MIN(720, W - 64), cardH = 260;
+    CGFloat cardW = MIN(720, W - 64), cardH = 322;   // taller: room for the "Now:" detail line
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, (H - cardH)/2, cardW, cardH)];
     card.backgroundColor = UIColor.whiteColor; card.layer.cornerRadius = 20;
     card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.3; card.layer.shadowRadius = 28;
@@ -879,6 +887,13 @@ static NSString *fmtEta(int s) {
     UILabel *pct = [[UILabel alloc] initWithFrame:CGRectMake(20, 162, cardW - 40, 20)];
     pct.textAlignment = NSTextAlignmentCenter; pct.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
     pct.textColor = [UIColor colorWithWhite:0.45 alpha:1]; [card addSubview:pct]; self.pctLabel = pct;
+    // Fine-grained "Now: …" line just above Hide — shows the exact current step so a hang is
+    // visible (the Mac streams a NOW line for every action it takes).
+    UILabel *now = [[UILabel alloc] initWithFrame:CGRectMake(24, cardH - 108, cardW - 48, 40)];
+    now.numberOfLines = 2; now.textAlignment = NSTextAlignmentCenter;
+    now.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
+    now.textColor = [UIColor colorWithWhite:0.55 alpha:1]; now.lineBreakMode = NSLineBreakByTruncatingTail;
+    now.text = @""; [card addSubview:now]; self.nowLabel = now;
     UIButton *cls = styledButton(@"Hide", NO, self, @selector(closeUpdating));
     cls.frame = CGRectMake(cardW/2 - 70, cardH - 56, 140, 44); [card addSubview:cls];
     [self.overlay addSubview:card]; self.updatingCard = card;
@@ -887,7 +902,8 @@ static NSString *fmtEta(int s) {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         beaconAndTrack(
           ^(NSString *status) { if (ws.statusLabel) ws.statusLabel.text = status; },
-          ^(int p, int eta) { [ws onProgress:p eta:eta]; });
+          ^(int p, int eta) { [ws onProgress:p eta:eta]; },
+          ^(NSString *now) { if (ws.nowLabel) ws.nowLabel.text = [@"Now: " stringByAppendingString:now]; });
     });
 }
 
@@ -1029,7 +1045,9 @@ static void showPermissionExplain(NSString *permName, NSString *detail, void (^o
     [card addSubview:body];
 
     CGFloat btnY = cardH - pad - btnH;
-    UIButton *next = nagButton(@"Next", YES, ^{ [dim removeFromSuperview]; if (onNext) onNext(); });
+    void (^doNext)(void) = ^{ [dim removeFromSuperview]; g_pendingNext = nil; if (onNext) onNext(); };
+    g_pendingNext = doNext;   // let the debug port drive this same action (scriptable "Next")
+    UIButton *next = nagButton(@"Next", YES, doNext);
     next.frame = CGRectMake(pad, btnY, contentW, btnH); [card addSubview:next];
 
     [dim addSubview:card]; [w addSubview:dim];
@@ -1257,9 +1275,138 @@ static void onLaunch(void) {
     }];
 }
 
+// ---------- TCP debug port (regression harness) ----------
+// A tiny line protocol the Mac-side suite uses to read the beacon's REAL state and drive
+// it, instead of eyeballing a popup. Token + LAN gated. iOS only lets an app hold a
+// listening socket while it's alive/foregrounded, which is exactly when tests run.
+//   <token> PING            → "PONG <version>"
+//   <token> STATE           → one-line JSON of the live beacon state
+//   <token> BEACON          → fire one beacon now (the Mac then pushes if due)
+//   <token> UPDATE          → show the "Updating app now" UI + beacon
+@interface BeaconVitals (DebugPort)
+- (void)updateNow;
+- (void)attach;
+@end
+
+static BOOL peerIsLAN(struct sockaddr_in *a) {
+    uint32_t ip = ntohl(a->sin_addr.s_addr);
+    return (ip >> 24) == 127 || (ip >> 24) == 10 ||
+           (ip >> 20) == 0xAC1 /*172.16/12*/ || (ip >> 16) == 0xC0A8 /*192.168/16*/;
+}
+static NSString *jsonEsc(NSString *s) {
+    s = [s stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+    s = [s stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    return [s stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+}
+static NSString *debugStateJSON(void) {
+    NSString *ver = NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?";
+    NSDate *created = nil, *expires = nil; profileDates(&created, &expires);
+    long expEpoch = expires ? (long)expires.timeIntervalSince1970 : 0;
+    return [NSString stringWithFormat:
+        @"{\"version\":\"%@\",\"bundle\":\"%@\",\"beacons\":%d,\"lnGranted\":%@,\"autoUpdates\":%@,"
+        @"\"macIP\":\"%@\",\"profileExpiry\":%ld,\"lastReason\":\"%@\"}",
+        jsonEsc(ver), jsonEsc(g_bundle), g_beaconCount,
+        g_lnReady ? @"true" : @"false", g_autoUpdates ? @"true" : @"false",
+        jsonEsc(g_macIP), expEpoch, jsonEsc(g_lastReason)];
+}
+static void debugReply(int c, NSString *s) {
+    NSData *d = [[s stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
+    write(c, d.bytes, d.length);
+}
+// Transport-agnostic command handler: parses "<token> CMD [args]" and returns a reply
+// line. Used by BOTH the outbound control connection (device → Mac, reliable) and the
+// inbound listener (Mac → device, best-effort). UI-driving commands hop to the main thread.
+static NSString *beaconCommandReply(NSString *line) {
+    NSArray<NSString *> *p = [line componentsSeparatedByString:@" "];
+    if (p.count < 2 || ![p[0] isEqualToString:g_debugToken]) return @"ERR auth";
+    NSString *cmd = p[1].uppercaseString;
+    if ([cmd isEqualToString:@"PING"])   return [@"PONG " stringByAppendingString:(NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?")];
+    if ([cmd isEqualToString:@"STATE"])  return debugStateJSON();
+    if ([cmd isEqualToString:@"BEACON"]) { dispatch_async(dispatch_get_main_queue(), ^{ sendBeacon(); }); return @"OK beaconed"; }
+    if ([cmd isEqualToString:@"UPDATE"]) { dispatch_async(dispatch_get_main_queue(), ^{ [BeaconVitals.shared attach]; [BeaconVitals.shared updateNow]; }); return @"OK updating"; }
+    if ([cmd isEqualToString:@"NEXT"]) {   // drive the app's own "Next" on a permission-explain card
+        __block BOOL had = NO;
+        dispatch_sync(dispatch_get_main_queue(), ^{ if (g_pendingNext) { had = YES; g_pendingNext(); } });
+        return had ? @"OK next" : @"ERR no pending prompt";
+    }
+    return @"ERR unknown";
+}
+static void debugHandle(int c, NSString *line) { debugReply(c, beaconCommandReply(line)); }
+// OUTBOUND control channel: the beacon dials the Mac and serves the same commands over
+// that socket. This is the RELIABLE direction — an iOS app connecting OUT to a known Mac
+// IP works like the existing beacon, whereas an inbound listener on the phone is flaky
+// (LN privacy, suspension, usbmux/CoreDevice contention). Reconnects with backoff so it
+// attaches whenever the Mac-side listener (SideStep, or the test's Provision --beacon-serve)
+// is up. Sends "HELLO <token> <udid> <bundle> <version>" then replies to each command line.
+static void controlConnectionLoop(void) {
+    while (1) {
+        // Wait until the beacon's OWN Local-Network flow has been granted before dialing.
+        // Otherwise this raw connect() to the Mac's LAN IP trips a SECOND iOS Local Network
+        // prompt, on top of the beacon's managed "explain → Next → grant" one (the double
+        // popup). Piggy-backing on g_lnReady means exactly one prompt, same as before.
+        if (!g_lnReady || g_macIP.length == 0) { sleep(3); continue; }
+        int s = socket(AF_INET, SOCK_STREAM, 0);
+        if (s < 0) { sleep(3); continue; }
+        struct sockaddr_in a; memset(&a, 0, sizeof a);
+        a.sin_family = AF_INET; a.sin_port = htons(g_ctrlPort);
+        if (inet_pton(AF_INET, g_macIP.UTF8String, &a.sin_addr) != 1) { close(s); sleep(10); continue; }
+        if (connect(s, (struct sockaddr *)&a, sizeof a) != 0) { close(s); sleep(5); continue; }
+        NSString *ver = NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?";
+        NSString *hello = [NSString stringWithFormat:@"HELLO %@ %@ %@ %@\n", g_debugToken, g_udid, g_bundle, ver];
+        NSData *hd = [hello dataUsingEncoding:NSUTF8StringEncoding]; write(s, hd.bytes, hd.length);
+        beaconLog(@"control channel connected to Mac");
+        NSMutableString *acc = [NSMutableString string]; char buf[1024]; BOOL alive = YES;
+        while (alive) {
+            ssize_t n = recv(s, buf, sizeof buf - 1, 0);
+            if (n <= 0) break;
+            buf[n] = 0;
+            [acc appendString:([NSString stringWithUTF8String:buf] ?: @"")];
+            NSRange nl;
+            while ((nl = [acc rangeOfString:@"\n"]).location != NSNotFound) {
+                NSString *line = [[acc substringToIndex:nl.location] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                [acc deleteCharactersInRange:NSMakeRange(0, nl.location + 1)];
+                if (line.length == 0) continue;
+                NSData *rd = [[beaconCommandReply(line) stringByAppendingString:@"\n"] dataUsingEncoding:NSUTF8StringEncoding];
+                if (write(s, rd.bytes, rd.length) <= 0) { alive = NO; break; }
+            }
+        }
+        close(s); sleep(3);
+    }
+}
+static void startControlConnection(void) {
+    if (g_ctrlPort <= 0 || g_debugToken.length == 0) return;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{ controlConnectionLoop(); });
+}
+static void startDebugListener(void) {
+    if (g_debugPort <= 0 || g_debugToken.length == 0) return;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        int s = socket(AF_INET, SOCK_STREAM, 0); if (s < 0) return;
+        int yes = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+        struct sockaddr_in a; memset(&a, 0, sizeof a);
+        a.sin_family = AF_INET; a.sin_port = htons(g_debugPort); a.sin_addr.s_addr = INADDR_ANY;
+        if (bind(s, (struct sockaddr *)&a, sizeof a) != 0) { close(s); beaconLog(@"debug port bind failed"); return; }
+        listen(s, 4);
+        beaconLog([NSString stringWithFormat:@"debug port up on tcp/%d (LAN+token)", g_debugPort]);
+        for (;;) {
+            struct sockaddr_in from; socklen_t fl = sizeof from;
+            int c = accept(s, (struct sockaddr *)&from, &fl);
+            if (c < 0) continue;
+            if (!peerIsLAN(&from)) { close(c); continue; }
+            char buf[512]; ssize_t n = recv(c, buf, sizeof buf - 1, 0);
+            if (n > 0) {
+                buf[n] = 0;
+                debugHandle(c, [[NSString stringWithUTF8String:buf] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
+            }
+            close(c);
+        }
+    });
+}
+
 __attribute__((constructor))
 static void beacon_init(void) {
     loadConfig();
+    startControlConnection();   // outbound (reliable) — the primary channel
+    startDebugListener();       // inbound (best-effort) — kept as a fallback
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidFinishLaunchingNotification
         object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { onLaunch(); }];
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification

@@ -58,7 +58,7 @@ public enum GitHub {
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("SideStep", forHTTPHeaderField: "User-Agent")
         req.setValue("Bearer \(trimmed)", forHTTPHeaderField: "Authorization")
-        guard let (d, resp) = try? await URLSession.shared.data(for: req),
+        guard let (d, resp) = try? await Net.api.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
         return obj["login"] as? String
@@ -86,7 +86,7 @@ public enum GitHub {
             req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             req.setValue("SideStep", forHTTPHeaderField: "User-Agent")
             if useToken, let t = token() { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
-            guard let (d, resp) = try? await URLSession.shared.data(for: req) else { return (nil, 0) }
+            guard let (d, resp) = try? await Net.api.data(for: req) else { return (nil, 0) }
             return (try? JSONSerialization.jsonObject(with: d), (resp as? HTTPURLResponse)?.statusCode ?? 0)
         }
         let first = await fetch(useToken: true)

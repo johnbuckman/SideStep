@@ -34,7 +34,7 @@ public struct Blocklist: Sendable {
     /// Pull the newest blocklist from the repo, cache it, and swap it in. Best-effort.
     public static func refresh() async {
         guard let u = URL(string: refreshURL),
-              let (d, _) = try? await URLSession.shared.data(from: u),
+              let (d, _) = try? await Net.api.data(from: u),
               let b = parse(d) else { return }
         try? FileManager.default.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
         try? d.write(to: URL(fileURLWithPath: cachePath))

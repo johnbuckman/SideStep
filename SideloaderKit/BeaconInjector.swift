@@ -41,11 +41,16 @@ public enum BeaconInjector {
             try Data(blob.map { $0 ^ 0xA5 }).write(to: dylibDst)
         } catch { log("beacon: dylib restore failed (\(error)) — skipping"); return false }
 
-        // 3) per-install runtime config
+        // 3) per-install runtime config. debug_token enables the on-device TCP debug port
+        // (LAN + token gated) the regression harness drives; a fixed dev token by default so
+        // BeaconConfig and the repo's regression/beacon-token.txt agree. Override per-install
+        // via env SIDESTEP_BEACON_TOKEN.
+        let debugToken = ProcessInfo.processInfo.environment["SIDESTEP_BEACON_TOKEN"] ?? "ss-beacon-debug-7f3a"
         let cfg: [String: Any] = [
             "mac_ip": macIP, "udid": udid, "bundleid": bundleID,
             "port": 51234, "update_interval": updateInterval, "foreground_check": 1800,
             "found_via": foundVia, "auto_updates": autoUpdates ? 1 : 0,
+            "debug_port": 51237, "debug_connect_port": 51236, "debug_token": debugToken,
         ]
         (cfg as NSDictionary).write(to: appDir.appendingPathComponent("BeaconConfig.plist"), atomically: true)
 

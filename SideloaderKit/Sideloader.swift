@@ -434,6 +434,35 @@ final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unc
 /// SIGKILLs after a short grace) the process once it outlives its deadline, which
 /// unblocks the read so the caller can throw and retry later instead of hanging.
 /// Cancel it as soon as the process exits on its own.
+/// Shared URLSessions with real deadlines. `URLSession.shared` has effectively no
+/// overall timeout, so a connection that stalls mid-transfer (dead Wi-Fi, a server
+/// that accepts the socket but never responds) leaves the awaiting task suspended
+/// forever. That matters here because the beacon updater's `withTimeout` can't truly
+/// abandon an in-flight URLSession `await` (a throwing task group awaits its children,
+/// and a bare URLSession await ignores cancellation) — so an un-timed-out request is
+/// exactly what pins the `busy` flag and locks the updater out. Every network call in
+/// SideloaderKit routes through one of these bounded sessions instead.
+public enum Net {
+    /// Small JSON/metadata calls (GitHub API, AltStore catalogs, source manifests).
+    public static let api: URLSession = {
+        let c = URLSessionConfiguration.default
+        c.timeoutIntervalForRequest = 30    // no progress for 30s → fail
+        c.timeoutIntervalForResource = 60   // hard cap on the whole request
+        c.waitsForConnectivity = false      // offline → fail fast, don't park the task
+        return URLSession(configuration: c)
+    }()
+    /// Config for large file downloads (IPA/app archives) — longer, but still bounded
+    /// below the 360s beacon-update deadline so the session gives up first (a clean
+    /// throw + retry) rather than relying on the busy self-heal backstop.
+    public static func downloadConfiguration() -> URLSessionConfiguration {
+        let c = URLSessionConfiguration.default
+        c.timeoutIntervalForRequest = 60    // 60s with no bytes received → give up
+        c.timeoutIntervalForResource = 300  // whole download must finish within 5 min
+        c.waitsForConnectivity = false
+        return c
+    }
+}
+
 final class ProcessWatchdog: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false
@@ -475,6 +504,39 @@ public struct Sideloader {
             }
             return first
         }
+    }
+
+    /// True when an Apple provisioning error means the account hit its device-registration
+    /// cap (free IDs: a handful of devices). Misclassifying this as a generic failure once
+    /// showed users "integrity could not be verified" instead of the real cause. Pure so
+    /// the regression suite can pin it.
+    public static func isDeviceLimitError(_ text: String) -> Bool {
+        let t = text.lowercased()
+        return t.contains("maximum number of registered") || t.contains("5405")
+    }
+
+    /// Friendly pair-over-USB guidance for a Wi-Fi/direct-IP install failure that's really a
+    /// missing trust/pair record (err -21 / -8), or nil if it's some other failure. Replaces
+    /// the cryptic "lockdown handshake err -21" users used to see.
+    public static func wifiPairingHint(_ ipOut: String) -> String? {
+        let lc = ipOut.lowercased()
+        guard lc.contains("pair record") || lc.contains("handshake by ip")
+            || lc.contains("err -21") || lc.contains("err -8") else { return nil }
+        return "Couldn’t open a trusted Wi-Fi session with this device. Two things enable wireless installs: (1) plug it in once via USB, unlock, and tap “Trust This Computer”; and (2) in Finder, click the device → General → tick “Show this iPhone/iPad when on Wi-Fi” → Apply. Then keep the device unlocked and try again. (Until then, a USB cable always works.)"
+    }
+
+    /// Pull the helper's actual ">>> …FAILED: <reason>" line (installd's real error text)
+    /// out of its output, rather than a blind tail slice that would cut off the front of a
+    /// long message (e.g. "APIInternalError: Failed to set app extension placeholders…").
+    /// Public + pure so the regression suite can pin this parsing.
+    public static func installFailReason(_ out: String) -> String {
+        if let line = out.split(separator: "\n").last(where: { $0.contains("FAILED") }) {
+            return line.replacingOccurrences(of: ">>> ", with: "")
+                       .replacingOccurrences(of: "DIRECT-IP INSTALL FAILED: ", with: "")
+                       .replacingOccurrences(of: "INSTALL FAILED: ", with: "")
+                       .trimmingCharacters(in: .whitespaces)
+        }
+        return String(out.suffix(300))
     }
 
     @discardableResult
@@ -532,12 +594,21 @@ public struct Sideloader {
         let r = s.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
         return r.isEmpty ? "app" : r
     }
-    /// The bundled libimobiledevice helper (device list/install/uninstall). No Python needed.
-    static func helperPath() -> String {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice/idevicehelper").path
-        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        return NSString(string: "~/altstore-fork/imd/dist/idevice/idevicehelper").expandingTildeInPath  // dev fallback
+    /// Directory holding the bundled device helpers. Resolution order:
+    ///  1. $SIDESTEP_HELPER_DIR (explicit override — the regression harness pins this so a
+    ///     headless CLI can't fall back to a stale copy),
+    ///  2. the app bundle's Contents/Helpers/idevice,
+    ///  3. the repo's Helpers/idevice (dev fallback).
+    /// NOTE: this used to fall back to ~/altstore-fork/imd/dist which went STALE (a July-28
+    /// pre-fix helper), so the Provision CLI silently ran the old false-OK installer.
+    static func helperDir() -> String {
+        if let d = ProcessInfo.processInfo.environment["SIDESTEP_HELPER_DIR"], !d.isEmpty { return d }
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice").path
+        if FileManager.default.isExecutableFile(atPath: bundled + "/idevicehelper") { return bundled }
+        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/idevice").expandingTildeInPath
     }
+    /// The bundled libimobiledevice helper (device list/install/uninstall). No Python needed.
+    static func helperPath() -> String { helperDir() + "/idevicehelper" }
 
     // MARK: - Developer Mode (iOS 16+)
 
@@ -548,11 +619,7 @@ public struct Sideloader {
         "On the device, open Settings ▸ Privacy & Security ▸ scroll to the bottom ▸ Developer Mode ▸ turn it On. " +
         "The device restarts; after it reboots, unlock it and tap “Turn On” to confirm. (Requires iOS/iPadOS 16 or later.)"
 
-    static func devModeCtlPath() -> String {
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice/idevicedevmodectl").path
-        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/idevice/idevicedevmodectl").expandingTildeInPath
-    }
+    static func devModeCtlPath() -> String { helperDir() + "/idevicedevmodectl" }
 
     /// Query Developer Mode for a USB-connected device. Returns .unknown for a
     /// device that isn't reachable over USB (e.g. Wi-Fi-only refreshes) so callers
@@ -598,9 +665,7 @@ public struct Sideloader {
 
     static func ipInstallPath() -> String {
         if let p = ProcessInfo.processInfo.environment["IWISH_IPINSTALL"], !p.isEmpty { return p }
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/idevice/idevice_ipinstall").path
-        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        return NSString(string: "~/altstore-fork/AltSign-SS/Helpers/idevice/idevice_ipinstall").expandingTildeInPath  // dev fallback (heartbeat+sync)
+        return helperDir() + "/idevice_ipinstall"
     }
 
     /// The prebuilt beacon dylib injected into every app we install.
@@ -748,12 +813,12 @@ public struct Sideloader {
 
     // MARK: source + download
 
-    static func parseSource(_ data: Data) -> [SourceApp] {
+    public static func parseSource(_ data: Data) -> [SourceApp] {
         (try? JSONDecoder().decode(AltSource.self, from: data))?.apps ?? []
     }
     public static func fetchSource(_ urlString: String) async throws -> [SourceApp] {
         guard let url = URL(string: urlString) else { throw SideErr.fail("bad source URL") }
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await Net.api.data(from: url)
         return parseSource(data)
     }
     /// Read an AltStore-format source from a local .json file.
@@ -790,7 +855,7 @@ public struct Sideloader {
         // the bar never moved — so we own the session and invalidate it when done.
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let delegate = DownloadProgressDelegate(dest: dest, onProgress: onProgress, cont: cont)
-            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            let session = URLSession(configuration: Net.downloadConfiguration(), delegate: delegate, delegateQueue: nil)
             session.downloadTask(with: url).resume()
         }
     }
@@ -945,7 +1010,7 @@ public struct Sideloader {
             let devName = connectedDevices().first(where: { $0.udid == iPadUDID })?.name
                 ?? DeviceIPCache.name(for: iPadUDID) ?? ""
             let regText = (regError.map { "\($0.localizedDescription) \(String(describing: $0))" } ?? "").lowercased()
-            if regText.contains("maximum number of registered") || regText.contains("5405") {
+            if isDeviceLimitError(regText) {
                 let others = AccountStore.records().map { $0.appleID }.filter { $0 != account.appleID }
                 log("device \(iPadUDID) not provisioned — Apple device limit reached on \(account.appleID)")
                 throw SideErr.deviceLimit(appleID: account.appleID, deviceName: devName, bundleID: origBundleID, others: others)
@@ -960,6 +1025,36 @@ public struct Sideloader {
         log("Signing \(displayName)… (profile exp \(profile.expirationDate))")
 
         try run("/usr/libexec/PlistBuddy", ["-c", "Set :CFBundleIdentifier \(bundleID)", plist])
+
+        // App extensions (PlugIns/*.appex) must (a) carry a CFBundleIdentifier that NESTS
+        // under the rewritten main id and (b) be provisioned with their OWN App ID + profile.
+        // Rewriting only the main id (above) leaves e.g. com.johnbuckman.stayontrack.widgets
+        // no longer a child of com.sidestep.stayontrack.<team>, and iOS then refuses the
+        // whole install: "Failed to set app extension placeholders …" (IXErrorDomain 2).
+        // So: for each extension, re-id it to <newMain>.<suffix>, register+provision it, and
+        // hand every profile to the signer (which matches each profile to its bundle by id).
+        var profiles: [ALTProvisioningProfile] = [profile]
+        let plugins = appCopy.appendingPathComponent("PlugIns")
+        let exts = (try? fm.contentsOfDirectory(at: plugins, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "appex" }) ?? []
+        for ext in exts {
+            let extPlist = ext.appendingPathComponent("Info.plist").path
+            guard let extOrig = plistValue("CFBundleIdentifier", extPlist) else { continue }
+            // Suffix relative to the ORIGINAL main id (fallback: the last component) so a
+            // multi-level id like com.acme.app.watch.widget keeps its shape under the new root.
+            let suffix = extOrig.hasPrefix(origBundleID + ".")
+                ? String(extOrig.dropFirst(origBundleID.count + 1))
+                : (extOrig as NSString).lastPathComponent
+            let extNewID = "\(bundleID).\(suffix)".lowercased()
+            try run("/usr/libexec/PlistBuddy", ["-c", "Set :CFBundleIdentifier \(extNewID)", extPlist])
+            let extAppID: ALTAppID
+            if let f = existing.first(where: { $0.bundleIdentifier == extNewID }) { extAppID = f }
+            else { extAppID = try await api.addAppID(withName: "\(sanitize(displayName)) \(sanitize(suffix)) SideStep",
+                                                     bundleIdentifier: extNewID, team: team, session: session) }
+            let extProfile = try await api.fetchProvisioningProfile(for: extAppID, deviceType: .iPad, team: team, session: session)
+            profiles.append(extProfile)
+            log("extension: \(extOrig) → \(extNewID)")
+        }
 
         // Instrument with the wireless self-updater (best-effort) BEFORE signing,
         // so zsign covers the injected dylib. Disable with IWISH_NO_BEACON.
@@ -978,7 +1073,7 @@ public struct Sideloader {
 
         let signer = ALTSigner(team: team, certificate: cert)
         _ = try await withCheckedThrowingContinuation { (c: CheckedContinuation<Bool, Error>) in
-            _ = signer.signApp(at: appCopy, provisioningProfiles: [profile]) { ok, e in ok ? c.resume(returning: true) : c.resume(throwing: e ?? SideErr.fail("signApp")) }
+            _ = signer.signApp(at: appCopy, provisioningProfiles: profiles) { ok, e in ok ? c.resume(returning: true) : c.resume(throwing: e ?? SideErr.fail("signApp")) }
         }
         // A USB device with Developer Mode off will reject the install with a
         // cryptic AMFI error — catch it here and tell the user exactly what to do.
@@ -1031,7 +1126,7 @@ public struct Sideloader {
         }
         func usbInstall() throws {
             let r = try runStreaming(helperPath(), ["install", iPadUDID, ipa.path], cwd: work, onLine: installLine)
-            guard r.contains("INSTALL OK") else { throw SideErr.fail("install failed: \(r.suffix(160))") }
+            guard r.contains("INSTALL OK") else { throw SideErr.fail("Install failed: \(Sideloader.installFailReason(r))") }
         }
         if conn == "usb" {
             // USB (usbmux) — reliable, no network pairing needed.
@@ -1047,11 +1142,8 @@ public struct Sideloader {
                     log("Direct-IP failed; device is in the device list — falling back to usbmux…")
                     try usbInstall()
                 } else {
-                    let lc = ipOut.lowercased()
-                    if lc.contains("pair record") || lc.contains("handshake by ip") || lc.contains("err -21") || lc.contains("err -8") {
-                        throw SideErr.fail("Couldn’t open a trusted Wi-Fi session with this device. Two things enable wireless installs: (1) plug it in once via USB, unlock, and tap “Trust This Computer”; and (2) in Finder, click the device → General → tick “Show this iPhone/iPad when on Wi-Fi” → Apply. Then keep the device unlocked and try again. (Until then, a USB cable always works.)")
-                    }
-                    throw SideErr.fail("Wi-Fi install failed. Make sure the device is unlocked and on the same network, then try again. (\(ipOut.suffix(160)))")
+                    if let hint = Sideloader.wifiPairingHint(ipOut) { throw SideErr.fail(hint) }
+                    throw SideErr.fail("Wi-Fi install failed. Make sure the device is unlocked and on the same network, then try again. (\(Sideloader.installFailReason(ipOut)))")
                 }
             }
         } else if connectedDevices().contains(where: { $0.udid == iPadUDID }) {
@@ -1179,7 +1271,27 @@ public struct Sideloader {
 
     /// Re-sign + (WiFi/USB) re-install one tracked app on its device.
     @discardableResult
-    public static func refreshOne(_ t: TrackedApp, log: @escaping (String) -> Void) async throws -> String {
+    /// True when a beacon-triggered reinstall of `t` would be pointless: the installed
+    /// signature is still fresh (installed < 24h ago) AND the app's content hasn't changed.
+    /// The device beacons on every launch — including right after a manual install — so
+    /// without this a just-installed app gets needlessly re-signed and reinstalled, which is
+    /// what left the triggering app's popup churning on "Still updating…". A GitHub app counts
+    /// as CHANGED (→ not redundant) when its latest release tag differs from the installed one;
+    /// local/file and http-source apps have nothing new to pull inside a 24h window (the daily
+    /// sweep still catches genuine source updates), so a fresh install is treated as redundant.
+    /// Only gates the automatic beacon path — a manual Refresh always reinstalls on demand.
+    public static func beaconReinstallIsRedundant(_ t: TrackedApp) async -> Bool {
+        guard let li = t.lastInstalled, Date().timeIntervalSince1970 - li < 24 * 3600 else { return false }
+        if !t.githubRepo.isEmpty,
+           let rel = await GitHub.latestIPA(repo: t.githubRepo), rel.tag != t.githubTag {
+            return false   // a newer release exists → the ipa changed → reinstall
+        }
+        return true
+    }
+
+    public static func refreshOne(_ t: TrackedApp, log: @escaping (String) -> Void,
+                                  onProgress: @escaping @Sendable (_ received: Int64, _ total: Int64) -> Void = { _, _ in },
+                                  onInstall: @escaping @Sendable (_ percent: Int, _ phase: String) -> Void = { _, _ in }) async throws -> String {
         guard let (account, session) = await ensureSession(t.appleID, log: log) else {
             throw SideErr.fail("Couldn't sign in to \(t.appleID) automatically. Open SideStep and sign in again — you may just need to enter a texted code.")
         }
@@ -1187,21 +1299,21 @@ public struct Sideloader {
         // on the newest build), updating the remembered tag.
         if !t.githubRepo.isEmpty, let rel = await GitHub.latestIPA(repo: t.githubRepo) {
             if rel.tag != t.githubTag { log("GitHub: \(t.githubRepo) → \(rel.tag) (was \(t.githubTag.isEmpty ? "none" : t.githubTag))") }
-            let ipa = try await GitHub.downloadIPA(rel)
+            let ipa = try await GitHub.downloadIPA(rel, onProgress: onProgress)
             defer { try? FileManager.default.removeItem(atPath: ipa) }
             return try await installFromIPA(account: account, session: session, filePath: ipa,
-                                            iPadUDID: t.udid, github: (t.githubRepo, rel.tag), log: log)
+                                            iPadUDID: t.udid, github: (t.githubRepo, rel.tag), log: log, onInstall: onInstall)
         }
         // AltStore/http source → re-download the current build from the source each time,
         // so the app tracks the source's latest version.
         if t.origin.hasPrefix("http") {
             let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-            let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log)
-            return try await install(account: account, session: session, appPath: appPath.path, source: t.origin, iPadUDID: t.udid, log: log)
+            let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log, onProgress: onProgress)
+            return try await install(account: account, session: session, appPath: appPath.path, source: t.origin, iPadUDID: t.udid, log: log, onInstall: onInstall)
         }
         // Local .ipa/.app → re-sign the cached copy (one-time content, just kept alive).
-        return try await installFromIPA(account: account, session: session, filePath: t.source, iPadUDID: t.udid, log: log)
+        return try await installFromIPA(account: account, session: session, filePath: t.source, iPadUDID: t.udid, log: log, onInstall: onInstall)
     }
 
     /// Daily sweep: for every GitHub-sourced tracked app whose repo now has a newer

@@ -1119,21 +1119,44 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         installing = true
         status = queue.count > 1 ? "Refreshing \(queue.count) apps on \(devName)…"
                                  : "Refreshing \(t.name) on \(devName)…"
+        // Same live progress/result popup as a first install, so the outcome (and any
+        // real error) is visible without scrolling the menu to the status line.
+        beginInstallProgress(title: queue.count > 1
+            ? "Refreshing \(queue.count) apps on \(devName)"
+            : "Refreshing “\(t.name)”\(devName == "device" ? "" : " on \(devName)")")
         Task.detached { [weak self] in
             guard let self else { return }
-            let log: @Sendable (String) -> Void = { m in print("[SideStep] \(m)"); Task { @MainActor in self.status = String(m.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "") } }
-            var ok = 0, fail = 0, last = ""
-            for app in queue {
-                do { last = try await Sideloader.refreshOne(app, log: log); ok += 1 }
-                catch { fail += 1; print("[SideStep] refresh failed for \(app.name): \(error)") }
-            }
-            await MainActor.run {
-                if queue.count > 1 {
-                    self.status = fail == 0 ? "Refreshed \(ok) apps on \(devName)."
-                                            : "Refreshed \(ok) of \(queue.count) on \(devName) — \(fail) failed."
-                } else {
-                    self.status = fail == 0 ? last : "Refresh failed: \(t.name)."
+            let log: @Sendable (String) -> Void = { m in
+                print("[SideStep] \(m)")
+                let line = String(m.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "")
+                Task { @MainActor in
+                    self.status = line
+                    if !line.isEmpty { self.ipStatus = line }
+                    if !line.contains("Downloading") { self.clearDownloadProgress() }
                 }
+            }
+            let onProgress: @Sendable (Int64, Int64) -> Void = { received, total in
+                Task { @MainActor in self.reportDownload(received: received, total: total) }
+            }
+            let onInstall: @Sendable (Int, String) -> Void = { percent, phase in
+                Task { @MainActor in self.reportInstallProgress(percent: percent, phase: phase) }
+            }
+            var ok = 0, fail = 0, last = "", lastErr = ""
+            for app in queue {
+                do { last = try await Sideloader.refreshOne(app, log: log, onProgress: onProgress, onInstall: onInstall); ok += 1 }
+                catch { fail += 1; lastErr = error.localizedDescription; print("[SideStep] refresh failed for \(app.name): \(error)") }
+            }
+            let ok2 = ok, fail2 = fail
+            await MainActor.run {
+                let msg: String
+                if queue.count > 1 {
+                    msg = fail2 == 0 ? "Refreshed \(ok2) apps on \(devName)."
+                                     : "Refreshed \(ok2) of \(queue.count) on \(devName) — \(fail2) failed."
+                } else {
+                    msg = fail2 == 0 ? last : "Refresh failed: \(t.name) — \(lastErr)"
+                }
+                self.status = msg
+                self.finishInstallProgress(ok: fail2 == 0, message: msg)
                 self.tracked = Tracked.all(); self.installing = false
             }
         }
@@ -1281,6 +1304,16 @@ struct ContentView: View {
     }
     @State private var collapsedAccounts = Set<String>()   // ids stored when COLLAPSED (default expanded)
     @State private var collapsedApps = Set<String>()
+    @State private var didSeedCollapse = false   // one-time: start every app's device list collapsed
+
+    /// On first load, collapse the device list under every app so the popover opens
+    /// compact (one row per app). Runs once; the user's later expand/collapse and any
+    /// app installed mid-session are left alone (a new install shows expanded).
+    private func seedCollapsedApps() {
+        guard !didSeedCollapse, !m.tracked.isEmpty else { return }
+        didSeedCollapse = true
+        collapsedApps = Set(m.tracked.map { "\($0.appleID)/\($0.origBundleID)" })
+    }
 
     private func accBinding(_ id: String) -> Binding<Bool> {
         Binding(get: { !collapsedAccounts.contains(id) },
@@ -1449,7 +1482,8 @@ struct ContentView: View {
         .padding(20)
         .frame(width: 440)
         .focusEffectDisabled()   // no stray blue keyboard-focus ring when the popover opens
-        .onAppear { m.loadAccountInfo() }
+        .onAppear { m.loadAccountInfo(); seedCollapsedApps() }
+        .onChange(of: m.tracked.count) { _, _ in seedCollapsedApps() }   // seed once tracked apps load in
         // Account/device pickers + GitHub/AltStore prompts + GitHub search are all
         // presented as NSAlerts / a standalone NSWindow (see AppModel) because a
         // SwiftUI dialog/sheet/textfield inside the MenuBarExtra popover is destroyed
@@ -1546,6 +1580,24 @@ struct AltStoreSearchView: View {
 
 /// Live install progress + final outcome, shown in its own window so the result is
 /// always visible without reopening SideStep.
+/// A solid filled-capsule button. macOS 26's prominent/default ("Liquid Glass") style,
+/// when hosted in the install-progress NSWindow, rendered the accent fill hugging the label
+/// inside a wider translucent track — so the button "didn't fill its border". This style
+/// draws one solid accent capsule that always fills, with a pressed dim. Enter still works
+/// because the call site keeps `.keyboardShortcut(.defaultAction)`.
+struct SolidCapsuleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 22).padding(.vertical, 8)
+            .frame(minWidth: 84)
+            .background(Capsule().fill(Color.accentColor))
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .contentShape(Capsule())
+    }
+}
+
 struct InstallProgressView: View {
     @ObservedObject var m: AppModel
     var body: some View {
@@ -1555,8 +1607,21 @@ struct InstallProgressView: View {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: m.ipOK ? "checkmark.circle.fill" : "xmark.octagon.fill")
                         .foregroundStyle(m.ipOK ? .green : .red).font(.title2)
-                    Text(m.ipResult.isEmpty ? (m.ipOK ? "Installed." : "Install failed.") : m.ipResult)
-                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    if m.ipOK {
+                        Text(m.ipResult.isEmpty ? "Installed." : m.ipResult)
+                            .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        // A failure can carry a long installd error — show it in full:
+                        // wrapping, selectable (so it can be copied), and scrollable past a
+                        // few lines so nothing is clipped.
+                        ScrollView(.vertical) {
+                            Text(m.ipResult.isEmpty ? "Install failed." : m.ipResult)
+                                .font(.callout).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 260)
+                    }
                 }
             } else if let p = m.ipProgress {
                 // Determinate download: a real bar with % · size · ETA underneath.
@@ -1584,11 +1649,11 @@ struct InstallProgressView: View {
             HStack {
                 Spacer()
                 Button(m.ipDone ? "OK" : "Hide") { m.closeInstallProgress() }
+                    .buttonStyle(SolidCapsuleButtonStyle())
                     .keyboardShortcut(.defaultAction)
-                    .fixedSize()   // keep the button at its ideal size — never compress the capsule
             }
         }
-        .padding(20).frame(width: 440, alignment: .leading)
+        .padding(20).frame(width: m.ipDone && !m.ipOK ? 560 : 440, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)   // adopt full height so nothing clips
     }
 }
@@ -1737,8 +1802,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // killed (no willTerminate line). Crash-safe /tmp log, so it survives.
     func applicationDidFinishLaunching(_ n: Notification) {
         CrashLog.log("app: applicationDidFinishLaunching (activationPolicy=\(NSApp.activationPolicy().rawValue), windows=\(NSApp.windows.count))")
+        reapOrphanedHelpers()   // clear stale device helpers before we touch any device
         // Belt-and-braces: a menu-bar-only app must be .accessory, not .prohibited.
         if NSApp.activationPolicy() != .accessory { NSApp.setActivationPolicy(.accessory) }
+    }
+    /// Kill orphaned device helpers left over from a previous session. When SideStep
+    /// quits or is force-killed mid-install, its idevice_ipinstall/idevicehelper child
+    /// is reparented to launchd and keeps running — holding the device's AFC /
+    /// installation_proxy / heartbeat session, which then WEDGES the next launch's
+    /// install of that device (the failure seen 2026-08-11: a stale ipinstall to a
+    /// Wi-Fi device jammed the app so its menu wouldn't even open). At startup we have
+    /// spawned no helpers of our own yet, so any running bundled helper is, by
+    /// definition, a stale orphan and safe to reap. (Child-side getppid guards in the
+    /// helpers are the belt to this braces — they self-exit when reparented.)
+    private func reapOrphanedHelpers() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        p.arguments = ["-f", "/Contents/Helpers/idevice/"]   // only our bundled device tools
+        do {
+            try p.run(); p.waitUntilExit()
+            if p.terminationStatus == 0 { CrashLog.log("startup: reaped orphaned device helper(s) from a prior session") }
+        } catch { CrashLog.log("startup: reapOrphanedHelpers failed: \(error)") }
     }
     func applicationWillTerminate(_ n: Notification) {
         CrashLog.log("app: applicationWillTerminate — clean shutdown via AppKit")

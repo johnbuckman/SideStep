@@ -3,23 +3,36 @@
 //   idevicehelper list
 //   idevicehelper install   <udid> <ipa>
 //   idevicehelper uninstall <udid> <bundleid>
+//   idevicehelper apps      <udid>              — installd's list of USER apps (ground truth)
+//   idevicehelper appinfo   <udid> <bundleid>   — one app's version, or "(not installed)"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <libimobiledevice/libimobiledevice.h>
 #include <libimobiledevice/lockdown.h>
 #include <libimobiledevice/afc.h>
 #include <libimobiledevice/installation_proxy.h>
+#include <plist/plist.h>
 
 static int g_err = 0;
 static char g_errmsg[512];
+static volatile int g_done = 0;   // set by status_cb when installd reaches a terminal state
 
+// installation_proxy delivers status updates here on a background thread while the
+// install runs. We capture the real installd error (name + description) so failures
+// are actionable instead of a bare code, emit on-device install %, and flag terminal
+// completion so cmd_install can wait for the true end of the operation.
 static void status_cb(plist_t command, plist_t status, void *udata) {
+    (void)command; (void)udata;
     char *nm = NULL, *ds = NULL; uint64_t code = 0;
     instproxy_status_get_error(status, &nm, &ds, &code);
     if (nm) {
         g_err = 1;
         snprintf(g_errmsg, sizeof(g_errmsg), "%s%s%s", nm, ds ? ": " : "", ds ? ds : "");
+        free(nm); free(ds);
+        g_done = 1;   // error is terminal
+        return;
     }
     free(nm); free(ds);
     // installation_proxy reports 0…100 as it copies/verifies/installs on-device. Emit it
@@ -28,6 +41,10 @@ static void status_cb(plist_t command, plist_t status, void *udata) {
     int pct = -1;
     instproxy_status_get_percent_complete(status, &pct);
     if (pct >= 0) { printf(">>> PROGRESS %d Installing\n", pct); fflush(stdout); }
+    // "Complete" is the successful terminal status.
+    char *st = NULL;
+    instproxy_status_get_name(status, &st);
+    if (st) { if (!strcmp(st, "Complete")) g_done = 1; free(st); }
 }
 
 static idevice_t connect_dev(const char *udid) {
@@ -86,7 +103,11 @@ static int cmd_uninstall(const char *udid, const char *bid) {
     lockdownd_start_service(ld, "com.apple.mobile.installation_proxy", &svc);
     instproxy_client_t ip = NULL;
     instproxy_client_new(d, svc, &ip);
-    instproxy_error_t e = instproxy_uninstall(ip, bid, NULL, status_cb, NULL);
+    // SYNC (callback == NULL): like instproxy_install, instproxy_uninstall is ASYNC
+    // when given a status callback — it returns 0 immediately and the helper exits
+    // before installd finishes, a false "OK". NULL runs it synchronously and returns
+    // the real result.
+    instproxy_error_t e = instproxy_uninstall(ip, bid, NULL, NULL, NULL);
     if (e == INSTPROXY_E_SUCCESS && !g_err) { printf(">>> UNINSTALL OK <<<\n"); return 0; }
     printf(">>> UNINSTALL FAILED: %s (%d)\n", g_errmsg, e);
     return 3;
@@ -143,17 +164,92 @@ static int cmd_install(const char *udid, const char *ipa) {
     instproxy_client_t ip = NULL;
     instproxy_client_new(d, ipsvc, &ip);
     plist_t opts = instproxy_client_options_new();
+    // ASYNC + WAIT. instproxy_install is SYNC only with a NULL callback, but the sync
+    // path returns just a numeric code — installd's real error text ("APIInternalError:
+    // <why>", "ApplicationVerificationFailed: …") only reaches us through the status
+    // callback. So we pass status_cb (to capture that text + on-device install %) and
+    // then WAIT for it to signal a terminal state. Without the wait, instproxy_install
+    // returns immediately after dispatching its status thread and the process would exit
+    // mid-install, so installd aborts it (the old false-"OK"). The wait is bounded so a
+    // silent installd can't hang us; the 300s ProcessWatchdog on the Mac side is the
+    // outer backstop.
+    g_err = 0; g_done = 0;
     instproxy_error_t e = instproxy_install(ip, remote, opts, status_cb, NULL);
     instproxy_client_options_free(opts);
-    if (e == INSTPROXY_E_SUCCESS && !g_err) { printf(">>> INSTALL OK <<<\n"); return 0; }
-    printf(">>> INSTALL FAILED: %s (%d)\n", g_errmsg, e);
+    if (e != INSTPROXY_E_SUCCESS) { printf(">>> INSTALL FAILED: could not start install (%d)\n", e); return 3; }
+    for (int ms = 0; !g_done && ms < 240000; ms += 50) usleep(50 * 1000);   // ≤4 min
+    instproxy_client_free(ip); ip = NULL;   // joins the status thread cleanly
+    if (g_done && !g_err) { printf(">>> INSTALL OK <<<\n"); return 0; }
+    printf(">>> INSTALL FAILED: %s\n", g_errmsg[0] ? g_errmsg : "no completion from installd (timed out)");
     return 3;
+}
+
+// installd's ground-truth list of installed USER apps. This is the oracle the
+// regression suite asserts against — never SideStep's own "INSTALL OK" claim, which
+// is exactly what lied during the false-OK bug. Output: one TAB-separated line per app
+// (bundleID<TAB>shortVersion<TAB>buildVersion<TAB>name), then ">>> APPS OK <n> <<<".
+static int browse_apps(const char *udid, plist_t *out) {
+    idevice_t d = connect_dev(udid);
+    if (!d) { printf(">>> APPS FAILED: no device\n"); return 2; }
+    lockdownd_client_t ld = NULL;
+    if (lockdownd_client_new_with_handshake(d, &ld, "sidestep") != LOCKDOWN_E_SUCCESS) { printf(">>> APPS FAILED: lockdown handshake\n"); return 2; }
+    lockdownd_service_descriptor_t svc = NULL;
+    if (lockdownd_start_service(ld, "com.apple.mobile.installation_proxy", &svc) != LOCKDOWN_E_SUCCESS) { printf(">>> APPS FAILED: start installation_proxy\n"); return 2; }
+    instproxy_client_t ip = NULL;
+    if (instproxy_client_new(d, svc, &ip) != INSTPROXY_E_SUCCESS) { printf(">>> APPS FAILED: instproxy client\n"); return 2; }
+    plist_t opts = instproxy_client_options_new();
+    instproxy_client_options_add(opts, "ApplicationType", "User", NULL);
+    instproxy_error_t e = instproxy_browse(ip, opts, out);
+    instproxy_client_options_free(opts);
+    if (e != INSTPROXY_E_SUCCESS || !*out) { printf(">>> APPS FAILED: browse (%d)\n", e); return 3; }
+    return 0;
+}
+static char *dict_str(plist_t app, const char *key) {
+    plist_t p = plist_dict_get_item(app, key);
+    if (!p) return NULL;
+    char *v = NULL; plist_get_string_val(p, &v); return v;
+}
+static int cmd_apps(const char *udid) {
+    plist_t apps = NULL;
+    int rc = browse_apps(udid, &apps); if (rc) return rc;
+    uint32_t n = plist_array_get_size(apps);
+    for (uint32_t i = 0; i < n; i++) {
+        plist_t app = plist_array_get_item(apps, i);
+        char *bid = dict_str(app, "CFBundleIdentifier"), *sv = dict_str(app, "CFBundleShortVersionString"),
+             *bv = dict_str(app, "CFBundleVersion"), *nm = dict_str(app, "CFBundleName");
+        printf("%s\t%s\t%s\t%s\n", bid?bid:"", sv?sv:"", bv?bv:"", nm?nm:"");
+        free(bid); free(sv); free(bv); free(nm);
+    }
+    plist_free(apps);
+    printf(">>> APPS OK %u <<<\n", n);
+    return 0;
+}
+static int cmd_appinfo(const char *udid, const char *bid) {
+    plist_t apps = NULL;
+    int rc = browse_apps(udid, &apps); if (rc) return rc;
+    uint32_t n = plist_array_get_size(apps);
+    for (uint32_t i = 0; i < n; i++) {
+        plist_t app = plist_array_get_item(apps, i);
+        char *b = dict_str(app, "CFBundleIdentifier");
+        if (b && !strcmp(b, bid)) {
+            char *sv = dict_str(app, "CFBundleShortVersionString"), *bv = dict_str(app, "CFBundleVersion"), *nm = dict_str(app, "CFBundleName");
+            printf("%s\t%s\t%s\t%s\n", b, sv?sv:"", bv?bv:"", nm?nm:"");
+            printf(">>> APPINFO OK <<<\n");
+            free(b); free(sv); free(bv); free(nm); plist_free(apps); return 0;
+        }
+        free(b);
+    }
+    plist_free(apps);
+    printf("%s\t(not installed)\n>>> APPINFO ABSENT <<<\n", bid);
+    return 1;
 }
 
 int main(int argc, char **argv) {
     if (argc >= 2 && !strcmp(argv[1], "list")) return cmd_list();
     if (argc >= 4 && !strcmp(argv[1], "install")) return cmd_install(argv[2], argv[3]);
     if (argc >= 4 && !strcmp(argv[1], "uninstall")) return cmd_uninstall(argv[2], argv[3]);
-    fprintf(stderr, "usage: idevicehelper list | install <udid> <ipa> | uninstall <udid> <bundleid>\n");
+    if (argc >= 3 && !strcmp(argv[1], "apps")) return cmd_apps(argv[2]);
+    if (argc >= 4 && !strcmp(argv[1], "appinfo")) return cmd_appinfo(argv[2], argv[3]);
+    fprintf(stderr, "usage: idevicehelper list | install <udid> <ipa> | uninstall <udid> <bundleid> | apps <udid> | appinfo <udid> <bundleid>\n");
     return 64;
 }
