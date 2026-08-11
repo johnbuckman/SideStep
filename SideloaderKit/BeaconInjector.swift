@@ -41,11 +41,19 @@ public enum BeaconInjector {
             try Data(blob.map { $0 ^ 0xA5 }).write(to: dylibDst)
         } catch { log("beacon: dylib restore failed (\(error)) — skipping"); return false }
 
-        // 3) per-install runtime config.
+        // 3) per-install runtime config. beacon_version = the SideStep version that injected
+        // this beacon, shown on the on-device diagnostics panel so you can tell at a glance
+        // whether an app carries an up-to-date beacon (matches your current SideStep) or an
+        // old one that needs a reinstall.
+        // The GUI app's bundle carries the version; a headless CLI (Provision) doesn't, so
+        // fall back to $SIDESTEP_VERSION for test installs.
+        var sideStepVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        if sideStepVersion.isEmpty { sideStepVersion = ProcessInfo.processInfo.environment["SIDESTEP_VERSION"] ?? "" }
         var cfg: [String: Any] = [
             "mac_ip": macIP, "udid": udid, "bundleid": bundleID,
             "port": 51234, "update_interval": updateInterval, "foreground_check": 1800,
             "found_via": foundVia, "auto_updates": autoUpdates ? 1 : 0,
+            "beacon_version": sideStepVersion,
         ]
         // The on-device beacon debug/control channel (inbound port + outbound dial-out) is
         // OFF by default — release and GUI installs ship no listening port and no token. It's

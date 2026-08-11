@@ -45,6 +45,7 @@ static int g_fgSec        = 1800;          // re-check every 30 min while the ap
 
 static NSString *g_bonjourIP = nil;        // filled in async by the Bonjour browser
 static NSString *g_foundVia = @"";         // how SideStep found this app (repo/url/file)
+static NSString *g_beaconVersion = @"";     // the SideStep version that injected this beacon
 static BOOL      g_autoUpdates = NO;        // YES = SideStep pushes new versions
 static NSDate   *g_lastBeaconAt = nil;
 static int       g_beaconCount = 0;
@@ -73,6 +74,7 @@ static void loadConfig(void) {
     if (c[@"update_interval"]) g_updateSec = [c[@"update_interval"] intValue];
     if (c[@"foreground_check"])g_fgSec = [c[@"foreground_check"] intValue];
     if (c[@"found_via"])       g_foundVia = c[@"found_via"];
+    if (c[@"beacon_version"])  g_beaconVersion = c[@"beacon_version"];
     if (c[@"auto_updates"])    g_autoUpdates = [c[@"auto_updates"] boolValue];
     if (c[@"debug_port"])         g_debugPort = [c[@"debug_port"] intValue];
     if (c[@"debug_connect_port"]) g_ctrlPort = [c[@"debug_connect_port"] intValue];
@@ -469,7 +471,7 @@ static NSString *vitalsText(void) {
     NSString *body = [NSString stringWithFormat:
         @"APP\n  %@  v%@ (%@)\n  %@\n\n"
         @"SOURCE\n  found via: %@\n  %@\n\n"
-        @"INSTALLED BY\n  %@\n\n"
+        @"INSTALLED BY\n  %@\n  beacon: SideStep v%@\n\n"
         @"SIGNING PROFILE\n  team:     %@\n  profile:  %@\n  devices:  %d provisioned\n"
         @"  updated:  %@  (%@)\n  expires:  %@\n  in:       %.1f days\n\n"
         @"UPDATER\n  interval: %d s\n  status:   %@\n  last chk: %@\n  beacons:  %d sent, last %@\n"
@@ -478,7 +480,7 @@ static NSString *vitalsText(void) {
         info[@"CFBundleDisplayName"] ?: @"?", info[@"CFBundleShortVersionString"] ?: @"?", info[@"CFBundleVersion"] ?: @"?",
         info[@"CFBundleIdentifier"] ?: @"?",
         g_foundVia.length ? g_foundVia : @"(unknown)", g_autoUpdates ? @"(app keeps up to date)" : @"(one-time install)",
-        byStr,
+        byStr, g_beaconVersion.length ? g_beaconVersion : @"?",
         prof[@"TeamName"] ?: @"?", prof[@"Name"] ?: @"?", (int)[prof[@"ProvisionedDevices"] count],
         fmtDate(created), fmtAgo(created), fmtDate(expires), expS/86400.0,
         g_updateSec, stale ? @"STALE → will beacon" : @"fresh", g_lastReason,
@@ -587,6 +589,17 @@ static void tcpStream(NSString *ip, NSString *req, void (^onLine)(NSString *)) {
 - (void)done { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
 
+// Full-screen dim overlay that reports when its bounds change (i.e. on device rotation),
+// so the diagnostics card — which is laid out with fixed frames for the current
+// orientation — can be rebuilt at the new size instead of staying portrait-sized in
+// landscape (content overflowed / was clipped).
+@interface BeaconOverlay : UIView
+@property(nonatomic, copy) void (^onBoundsChange)(void);
+@end
+@implementation BeaconOverlay
+- (void)layoutSubviews { [super layoutSubviews]; if (self.onBoundsChange) self.onBoundsChange(); }
+@end
+
 @interface BeaconVitals : NSObject <UIGestureRecognizerDelegate>
 @property(nonatomic, weak) UIView *overlay;
 @property(nonatomic, weak) UILabel *label;
@@ -635,9 +648,21 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
 
 - (void)show {
     UIWindow *w = [self keyWindow]; if (!w) return;
-    UIView *dim = [[UIView alloc] initWithFrame:w.bounds];
+    BeaconOverlay *dim = [[BeaconOverlay alloc] initWithFrame:w.bounds];
     dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.40];
     dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    // Rebuild the card at the new size when the orientation flips (portrait<->landscape).
+    // The card frames are fixed for the orientation they were built in, so a size change
+    // means re-laying-out; rebuilding (not resizing) is simplest and keeps scroll sane.
+    CGFloat builtW = w.bounds.size.width;
+    __weak BeaconVitals *ws = self;
+    dim.onBoundsChange = ^{
+        UIWindow *win = [ws keyWindow]; if (!win || !ws.overlay) return;
+        if (fabs(win.bounds.size.width - builtW) > 1.0) {   // real orientation/size change
+            [ws.overlay removeFromSuperview]; ws.overlay = nil;
+            [ws show];   // rebuild at the new orientation's dimensions
+        }
+    };
 
     CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
     CGFloat cardW = MIN(560, W - 48), cardH = MIN(H - 120, 620);
