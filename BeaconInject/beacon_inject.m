@@ -1030,76 +1030,25 @@ static void showPermissionNag(NSString *permName, NSString *detail,
     [dim addSubview:card]; [w addSubview:dim];
 }
 
-// A pre-permission explainer: says WHY the permission is needed, with a single
-// "Next" button that (on tap) triggers the real iOS system prompt via `onNext`.
-// This is the "explain → NEXT → grant" step the beacon installer was missing — so
-// the first network action no longer races an un-granted permission and fails.
+// Pre-permission explainer — REMOVED. We used to show our own "%@ access is needed"
+// card (with a "Next" button) before triggering the real iOS system prompt. John
+// asked to drop these custom cards (the "Local Network access is needed" and
+// "Notifications access is needed" popups), so we now go straight to the real iOS
+// prompt: `onNext` — which fires the actual system permission dialog — runs
+// immediately. The g_pendingNext debug hook stays wired but simply never has a card
+// to drive now (the NEXT command returns "no pending prompt").
 static void showPermissionExplain(NSString *permName, NSString *detail, void (^onNext)(void)) {
-    UIWindow *w = beaconKeyWindow(); if (!w) { if (onNext) onNext(); return; }
-    for (UIView *sub in w.subviews) if (sub.tag == 0x5EED0001) return;   // only one at a time
-
-    CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
-    UIView *dim = [[UIView alloc] initWithFrame:w.bounds];
-    dim.tag = 0x5EED0001;
-    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
-    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-
-    CGFloat pad = 24, cardW = MIN(460, W - 48), contentW = cardW - pad * 2;
-    UIFont *bodyFont = [UIFont systemFontOfSize:15];
-    CGRect br = [detail boundingRectWithSize:CGSizeMake(contentW, 1000)
-                    options:NSStringDrawingUsesLineFragmentOrigin
-                    attributes:@{NSFontAttributeName: bodyFont} context:nil];
-    CGFloat bodyH = ceil(br.size.height), btnH = 48;
-    CGFloat cardH = pad + 28 + 12 + bodyH + 22 + btnH + pad;
-
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, (H - cardH)/2, cardW, cardH)];
-    card.backgroundColor = UIColor.whiteColor; card.layer.cornerRadius = 20;
-    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.3; card.layer.shadowRadius = 28;
-    card.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin |
-                            UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
-
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, pad, contentW, 28)];
-    title.text = [NSString stringWithFormat:@"%@ access is needed", permName];
-    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
-    title.textColor = [UIColor colorWithWhite:0.1 alpha:1];
-    [card addSubview:title];
-
-    UILabel *body = [[UILabel alloc] initWithFrame:CGRectMake(pad, pad + 28 + 12, contentW, bodyH)];
-    body.text = detail; body.font = bodyFont; body.numberOfLines = 0;
-    body.textColor = [UIColor colorWithWhite:0.3 alpha:1];
-    [card addSubview:body];
-
-    CGFloat btnY = cardH - pad - btnH;
-    void (^doNext)(void) = ^{ [dim removeFromSuperview]; g_pendingNext = nil; if (onNext) onNext(); };
-    g_pendingNext = doNext;   // let the debug port drive this same action (scriptable "Next")
-    UIButton *next = nagButton(@"Next", YES, doNext);
-    next.frame = CGRectMake(pad, btnY, contentW, btnH); [card addSubview:next];
-
-    [dim addSubview:card]; [w addSubview:dim];
+    (void)permName; (void)detail;
+    if (onNext) onNext();   // no card — trigger the real iOS system prompt directly
 }
 
-// A brief auto-dismissing confirmation shown right after a permission is granted —
-// the "page refreshes to PERMISSION GRANTED" acknowledgement.
+// Post-grant confirmation toast — REMOVED. This used to flash a green
+// "✓ %@ access granted" card after the user allowed a permission. John asked to
+// drop the "Local Network access granted" message, so this is now a no-op; the
+// callers are left in place (harmless) so the surrounding grant-flow logic — the
+// g_lnJustPrompted reset, etc. — is unchanged.
 static void showGrantedToast(NSString *permName) {
-    UIWindow *w = beaconKeyWindow(); if (!w) return;
-    for (UIView *sub in w.subviews) if (sub.tag == 0x5EED0002) return;
-    CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
-    CGFloat cardW = MIN(360, W - 64), cardH = 108;
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, (H - cardH)/2, cardW, cardH)];
-    card.tag = 0x5EED0002;
-    card.backgroundColor = UIColor.whiteColor; card.layer.cornerRadius = 18;
-    card.layer.shadowColor = UIColor.blackColor.CGColor; card.layer.shadowOpacity = 0.28; card.layer.shadowRadius = 24;
-    card.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin |
-                            UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
-    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, cardW - 32, cardH)];
-    l.numberOfLines = 2; l.textAlignment = NSTextAlignmentCenter;
-    l.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-    l.textColor = [UIColor colorWithRed:0.13 green:0.55 blue:0.24 alpha:1];
-    l.text = [NSString stringWithFormat:@"✓ %@ access granted", permName];
-    [card addSubview:l]; [w addSubview:card];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [UIView animateWithDuration:0.25 animations:^{ card.alpha = 0; } completion:^(BOOL f){ [card removeFromSuperview]; }];
-    });
+    (void)permName;   // no confirmation card
 }
 
 // Fire the queued Local-Network-gated action exactly once, marking access ready.
