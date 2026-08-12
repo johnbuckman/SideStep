@@ -107,15 +107,17 @@ assert_device_version() {
   assert_eq "$1" "$4" "$got"
 }
 
-# install_uninstall_cycle <label> <AppName> <version> [--ext]
+# install_uninstall_cycle <label> <AppName> <version> [build-args...]
 # Full Tier-B cycle: build a versioned test app → SideStep signs+installs it → assert
 # installd shows it at that exact version → SideStep uninstalls → assert installd drops it.
 # Distinct version each run proves a real re-sign+install, not a cached copy.
+# The 4th arg is passed verbatim to build-test-app.sh, so a scenario can request extra
+# build behaviour — e.g. "--ext" (nested appex) or "--pad 150" (large multi-chunk .ipa).
 install_uninstall_cycle() {
-  local label="$1" name="$2" ver="$3" ext="${4:-}"
+  local label="$1" name="$2" ver="$3" extra="${4:-}"
   local lower; lower="$(echo "$name" | tr '[:upper:]' '[:lower:]')"
   # shellcheck disable=SC2086
-  if "$REPO/regression/build-test-app.sh" "$ver" --name "$name" $ext >/dev/null 2>&1; then
+  if "$REPO/regression/build-test-app.sh" "$ver" --name "$name" $extra >/dev/null 2>&1; then
     pass "$label: build v$ver"
   else fail "$label: build v$ver"; return; fi
 

@@ -1,18 +1,24 @@
 #!/bin/bash
 # Build a tiny, version-stamped iOS test app for the regression suite.
-#   ./build-test-app.sh [version] [--name NAME] [--ext]
+#   ./build-test-app.sh [version] [--name NAME] [--ext] [--pad MB]
 #     version   default 1.0.0
 #     --name     app name (default SelfTest) → id com.sidestep.<lowername>.<team> after signing
 #     --ext      also bundle a PlugIns/<NAME>Ext.appex app extension (exercises the
 #                extension-bundle-id-nesting path SideStep has to rewrite)
+#     --pad MB   embed MB megabytes of INCOMPRESSIBLE random data in the bundle, so the
+#                signed .ipa stays that large and its AFC upload spans many chunks — the
+#                many-chunk afc_file_write loop a few-KB app never exercises. The data is
+#                from /dev/urandom on purpose: zero-padding would zip back down to a single
+#                chunk and silently defeat the large-file regression it's meant to drive.
 # Produces regression/artifacts/<NAME>.app (unsigned; SideStep signs it at install).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-VER="1.0.0"; NAME="SelfTest"; EXT=0
+VER="1.0.0"; NAME="SelfTest"; EXT=0; PAD=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
     --ext)  EXT=1; shift ;;
+    --pad)  PAD="$2"; shift 2 ;;
     *)      VER="$1"; shift ;;
   esac
 done
@@ -76,4 +82,13 @@ PLIST
   echo "built $OUT  (v$VER, +appex ${NAME}Widget)"
 else
   echo "built $OUT  (v$VER, $(stat -f%z "$OUT/$NAME") bytes)"
+fi
+
+# Large-payload padding (see --pad above). A regular file inside the .app bundle: code
+# signing seals it into the resource envelope and it rides along in the installed .ipa,
+# so the AFC upload is genuinely MB-scale and multi-chunk — reproducing the "afc write"
+# failure surface. Written incompressible so the zipped .ipa can't shrink past it.
+if [ "$PAD" -gt 0 ]; then
+  dd if=/dev/urandom of="$OUT/pad.bin" bs=1048576 count="$PAD" 2>/dev/null
+  echo "  padded with $PAD MB incompressible data → $(stat -f%z "$OUT/pad.bin") bytes ($OUT/pad.bin)"
 fi

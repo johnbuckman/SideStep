@@ -539,6 +539,20 @@ public struct Sideloader {
         return String(out.suffix(300))
     }
 
+    /// Whether an install failure is worth retrying. Transient device-side AFC/lockdown
+    /// hiccups — most visibly ">>> INSTALL FAILED: afc write" partway through a large IPA,
+    /// seen on back-to-back installs before the device's AFC service has settled — clear on
+    /// a fresh session, so a retry lands. Signing/verification failures ("ApplicationVerification
+    /// Failed", "app extension placeholders", a bad/unreadable IPA) are deterministic: retrying
+    /// just re-uploads the IPA for nothing, so we fail fast on those. Pure so the regression
+    /// suite can pin the classification.
+    public static func isRetryableInstallFailure(_ reason: String) -> Bool {
+        let r = reason.lowercased()
+        return r.contains("afc write") || r.contains("afc open")
+            || r.contains("afc client") || r.contains("could not start afc")
+            || r.contains("lockdown handshake")
+    }
+
     @discardableResult
     public static func run(_ tool: String, _ args: [String], cwd: URL? = nil, env: [String: String]? = nil,
                     timeout: TimeInterval = 180, okStatuses: Set<Int32> = [0]) throws -> String {
@@ -1162,8 +1176,25 @@ public struct Sideloader {
             }
         }
         func usbInstall() throws {
-            let r = try runStreaming(helperPath(), ["install", iPadUDID, ipa.path], cwd: work, onLine: installLine)
-            guard r.contains("INSTALL OK") else { throw SideErr.fail("Install failed: \(Sideloader.installFailReason(r))") }
+            // The AFC upload can hit a transient stall — most visibly ">>> INSTALL FAILED:
+            // afc write" partway through a large IPA, seen installing big apps back-to-back
+            // before the device's AFC service has settled from the previous copy. Retry a few
+            // times: each attempt re-runs the helper, which opens a FRESH lockdown+AFC session
+            // and reopens the staging file WRONLY (O_TRUNC), so a half-written file from the
+            // failed attempt is overwritten cleanly. Only transient AFC/lockdown failures are
+            // retried (see isRetryableInstallFailure); signing/verification errors fail fast.
+            let maxAttempts = 3
+            var reason = ""
+            for attempt in 1...maxAttempts {
+                let r = try runStreaming(helperPath(), ["install", iPadUDID, ipa.path], cwd: work, onLine: installLine)
+                if r.contains("INSTALL OK") { return }
+                reason = Sideloader.installFailReason(r)
+                guard attempt < maxAttempts, Sideloader.isRetryableInstallFailure(reason) else { break }
+                log("Install attempt \(attempt) failed (\(reason)) — retrying…")
+                onInstall(0, "Retrying")
+                Thread.sleep(forTimeInterval: 1.5)
+            }
+            throw SideErr.fail("Install failed: \(reason)")
         }
         if conn == "usb" {
             // USB (usbmux) — reliable, no network pairing needed.
