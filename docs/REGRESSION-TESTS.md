@@ -16,6 +16,14 @@ the suite is built on two rules:
 2. **A scriptable control surface** on both ends — a headless `Provision` CLI on the Mac and
    a control channel on the injected device beacon — so tests run with no human in the loop.
 
+The same false-OK class bit the **archive pipeline**: `run()` used to *ignore the exit status*
+of `unzip` / `zip`, so a truncated download or a disk-full re-zip produced a corrupt `out.ipa`
+that only `installd` rejected — as the opaque **`PackageExtractionFailed: Could not extract
+archive`**. `run()` now throws on a disallowed exit (extract callers allow `unzip`'s benign
+exit-1 warning), and `Sideloader.verifyArchive()` gates every `.ipa` (download, re-zip, and
+local file) with a PK-header + central-directory check *on the Mac*, before it can reach the
+device. The `01-logic` scenario pins all of this.
+
 ## Running it
 
 ```bash
@@ -34,7 +42,7 @@ bundled `Helpers/idevice/` tools.
 | Scenario | Tier | Asserts |
 |---|---|---|
 | `00-oracle`    | ground truth | `installd` browse works; a known app resolves; a bogus id reports ABSENT |
-| `01-logic`     | A (no device) | `GitHub.normalizeRepo`; AltStore v1 + v2 `versions[]` parse; `VersionCompare.isNewer`; `installFailReason`; `isDeviceLimitError`; `wifiPairingHint` |
+| `01-logic`     | A (no device) | `GitHub.normalizeRepo`; AltStore v1 + v2 `versions[]` parse; `VersionCompare.isNewer`; `installFailReason`; `isDeviceLimitError`; `wifiPairingHint`; **`run` throws on a non-zero subprocess exit (honoring `okStatuses`); `verifyArchive` rejects a truncated / non-zip `.ipa`** |
 | `02-install`   | B (device) | build a random-versioned app → install → **installd shows that exact version** → uninstall → ABSENT |
 | `03-extension` | B (device) | same, for an app with a nested `.appex` (the extension-bundle-id nesting path) |
 | `05-appid`     | B (device) | reinstall **reuses** the same `com.sidestep.<name>.<team>` id (Apple caps *new* App IDs at 10 / 7 days) |

@@ -72,6 +72,41 @@ if args.contains("--selftest") {
     check("wifiPairingHint: err -21 → guidance",  (Sideloader.wifiPairingHint("DIRECT-IP INSTALL FAILED: handshake by IP err -21")?.contains("Trust This Computer")) == true)
     check("wifiPairingHint: no pair record → nil", Sideloader.wifiPairingHint("some unrelated wifi error") == nil)
 
+    // Subprocess exit-status handling + archive integrity — the fix for the "Could not
+    // extract archive" install failure. run() must NOT swallow a non-zero exit (that
+    // false-OK produced a corrupt archive that only installd rejected), yet must tolerate
+    // unzip's benign exit-1 warnings; verifyArchive() must reject a truncated/garbage .ipa
+    // on the Mac (PK-header + central-directory check) instead of shipping it to the device.
+    func tmp(_ name: String) -> String {
+        FileManager.default.temporaryDirectory.appendingPathComponent("sstest-\(UUID().uuidString)-\(name)").path
+    }
+    // run() throws on a real non-zero exit…
+    check("run throws on non-zero exit",
+          (try? Sideloader.run("/bin/sh", ["-c", "exit 3"])) == nil)
+    // …but honors okStatuses (a tolerated code does NOT throw)…
+    check("run honors okStatuses (exit 1 tolerated)",
+          (try? Sideloader.run("/bin/sh", ["-c", "exit 1"], okStatuses: [0, 1])) != nil)
+    // …and a clean exit still returns output.
+    check("run returns output on success",
+          ((try? Sideloader.run("/bin/echo", ["ok"]))?.contains("ok")) == true)
+
+    // verifyArchive: build a REAL zip, then a truncated copy, then a non-zip file.
+    let goodZip = tmp("good.ipa"), truncZip = tmp("trunc.ipa"), notZip = tmp("plain.ipa")
+    let stage = tmp("stage")
+    try? FileManager.default.createDirectory(atPath: "\(stage)/Payload/A.app", withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: "\(stage)/Payload/A.app/x", contents: Data(repeating: 0x41, count: 4096))
+    _ = try? Sideloader.run("/usr/bin/zip", ["-qXr", goodZip, "Payload"], cwd: URL(fileURLWithPath: stage))
+    check("verifyArchive accepts a valid .ipa", (try? Sideloader.verifyArchive(goodZip)) != nil)
+    // Truncate to the first half → central directory unreadable → must be rejected.
+    if let whole = try? Data(contentsOf: URL(fileURLWithPath: goodZip)), whole.count > 64 {
+        try? whole.prefix(whole.count / 2).write(to: URL(fileURLWithPath: truncZip))
+        check("verifyArchive rejects a truncated .ipa", (try? Sideloader.verifyArchive(truncZip)) == nil)
+    } else { check("verifyArchive rejects a truncated .ipa", false, "could not build fixture") }
+    // A non-zip payload (e.g. an HTML error page saved as .ipa) → no PK header → rejected.
+    try? "<html>error</html>".data(using: .utf8)!.write(to: URL(fileURLWithPath: notZip))
+    check("verifyArchive rejects a non-zip file", (try? Sideloader.verifyArchive(notZip)) == nil)
+    for f in [goodZip, truncZip, notZip, stage] { try? FileManager.default.removeItem(atPath: f) }
+
     print(fail == 0 ? ">>> SELFTEST OK \(pass) passed" : ">>> SELFTEST FAIL \(fail)/\(pass+fail)")
     exit(fail == 0 ? 0 : 1)
 }

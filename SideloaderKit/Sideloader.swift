@@ -540,8 +540,8 @@ public struct Sideloader {
     }
 
     @discardableResult
-    static func run(_ tool: String, _ args: [String], cwd: URL? = nil, env: [String: String]? = nil,
-                    timeout: TimeInterval = 180) throws -> String {
+    public static func run(_ tool: String, _ args: [String], cwd: URL? = nil, env: [String: String]? = nil,
+                    timeout: TimeInterval = 180, okStatuses: Set<Int32> = [0]) throws -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)
         p.arguments = args
@@ -556,7 +556,36 @@ public struct Sideloader {
         if watchdog.fired && p.terminationReason == .uncaughtSignal {
             throw SideErr.timeout("\((tool as NSString).lastPathComponent) timed out after \(Int(timeout))s — will retry later.")
         }
-        return String(data: data, encoding: .utf8) ?? ""
+        let out = String(data: data, encoding: .utf8) ?? ""
+        // A non-zero exit used to be SILENTLY IGNORED — a subprocess-level false-OK. When
+        // `unzip` hit a truncated download, or `zip` ran out of disk mid-archive, run()
+        // returned "success" and the corrupt archive went to the device, where installd
+        // reported the cryptic "PackageExtractionFailed: Could not extract archive". Treat
+        // a disallowed exit status as a hard, legible error instead.
+        // NOTE: `unzip` returns 1 for BENIGN warnings (e.g. extra bytes in an .ipa) on a
+        // perfectly good archive — extract/list callers pass okStatuses:[0,1] so only >=2
+        // (genuine corruption) is fatal.
+        if p.terminationReason == .exit && !okStatuses.contains(p.terminationStatus) {
+            let tail = out.split(separator: "\n").suffix(6).joined(separator: " | ")
+            throw SideErr.fail("\((tool as NSString).lastPathComponent) failed (exit \(p.terminationStatus))\(tail.isEmpty ? "" : ": \(tail)")")
+        }
+        return out
+    }
+
+    /// Fail LOUDLY on the Mac if `path` is not a readable zip archive, BEFORE it is ever
+    /// handed to the device. A truncated download or a re-zip that ran out of disk leaves an
+    /// archive whose central directory can't be read (`unzip -l` exits >=2); catching that
+    /// here turns installd's opaque "PackageExtractionFailed: Could not extract archive"
+    /// into a clear, actionable cause. (This is the false-OK class the regression suite
+    /// guards — never trust an unverified "it worked".)
+    public static func verifyArchive(_ path: String) throws {
+        let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int) ?? 0
+        guard let fh = FileHandle(forReadingAtPath: path) else { throw SideErr.fail("archive missing: \(path)") }
+        let magic = fh.readData(ofLength: 2); try? fh.close()
+        guard magic == Data([0x50, 0x4b]) else {   // "PK" — a real zip; an HTML error page / partial file is not
+            throw SideErr.fail("not a valid .ipa (\(size) bytes, missing PK header) — the download or packaging step failed")
+        }
+        _ = try run("/usr/bin/unzip", ["-l", path], okStatuses: [0, 1])   // reads the central directory; throws on >=2
     }
 
     /// Like run(), but delivers each output line to `onLine` as it arrives (so
@@ -867,7 +896,11 @@ public struct Sideloader {
         log("Downloading \(url.lastPathComponent)…")
         let ipa = work.appendingPathComponent("dl.ipa")
         try await downloadFile(from: url, to: ipa, onProgress: onProgress)
-        try run("/usr/bin/unzip", ["-q", ipa.path, "-d", work.path])
+        // Verify the download is a whole, readable .ipa before we unzip+re-sign it. A
+        // truncated GitHub/CDN transfer (or an HTML error page served in its place) is the
+        // classic cause of a later "Could not extract archive" on the device.
+        try verifyArchive(ipa.path)
+        try run("/usr/bin/unzip", ["-q", ipa.path, "-d", work.path], okStatuses: [0, 1])
         let payload = work.appendingPathComponent("Payload")
         let apps = (try? FileManager.default.contentsOfDirectory(atPath: payload.path)) ?? []
         guard let appName = apps.first(where: { $0.hasSuffix(".app") }) else { throw SideErr.fail("no .app in IPA") }
@@ -1090,6 +1123,10 @@ public struct Sideloader {
         try fm.moveItem(at: appCopy, to: payload.appendingPathComponent("\(sanitize(displayName)).app"))
         let ipa = work.appendingPathComponent("out.ipa")
         try run("/usr/bin/zip", ["-qXr9", ipa.path, "Payload"], cwd: work)
+        // The re-zip can silently truncate if the disk fills; verify the archive we're
+        // about to upload is whole, so a packaging failure surfaces HERE (with a clear
+        // cause) instead of as installd's opaque "Could not extract archive".
+        try verifyArchive(ipa.path)
         // Debug aid: keep a copy of the signed IPA for inspection.
         if let keep = ProcessInfo.processInfo.environment["IWISH_KEEP_IPA"], !keep.isEmpty {
             try? fm.removeItem(atPath: keep)
@@ -1200,7 +1237,8 @@ public struct Sideloader {
         }
         let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-ipa-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-        try run("/usr/bin/unzip", ["-q", filePath, "-d", work.path])
+        try verifyArchive(filePath)   // a corrupt local .ipa fails here, legibly, not on-device
+        try run("/usr/bin/unzip", ["-q", filePath, "-d", work.path], okStatuses: [0, 1])
         let payload = work.appendingPathComponent("Payload")
         let apps = (try? FileManager.default.contentsOfDirectory(atPath: payload.path)) ?? []
         guard let appName = apps.first(where: { $0.hasSuffix(".app") }) else { throw SideErr.fail("no .app inside the IPA") }
