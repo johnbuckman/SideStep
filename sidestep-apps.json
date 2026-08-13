@@ -54,9 +54,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decent-icon.png",
       "versions": [
         {
-          "version": "0.7.17-beta.5",
-          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.7.17-beta.5/decaid-ios-unsigned-0.7.17-beta.5.ipa",
-          "size": 52739101
+          "version": "0.7.17",
+          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.7.17/decaid-ios-unsigned-0.7.17.ipa",
+          "size": 53243059
         }
       ]
     },
@@ -68,9 +68,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/de1app-icon.png",
       "versions": [
         {
-          "version": "1.46.1.158",
-          "downloadURL": "https://github.com/decentespresso/de1app/releases/download/v1.46.1.158/de1app-ios.ipa",
-          "size": 125924914
+          "version": "1.46.1.159",
+          "downloadURL": "https://github.com/decentespresso/de1app/releases/download/v1.46.1.159/de1app-ios.ipa",
+          "size": 95527125
         }
       ]
     },
