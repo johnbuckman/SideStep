@@ -1186,13 +1186,25 @@ public struct Sideloader {
             let maxAttempts = 3
             var reason = ""
             for attempt in 1...maxAttempts {
-                let r = try runStreaming(helperPath(), ["install", iPadUDID, ipa.path], cwd: work, onLine: installLine)
+                // Pass the expected bundle id so the helper verifies against installd's own
+                // app list before claiming INSTALL OK — a "Complete" that didn't actually land
+                // (e.g. Developer Mode off) then fails honestly instead of writing a phantom
+                // tracked-app record.
+                let r = try runStreaming(helperPath(), ["install", iPadUDID, ipa.path, bundleID], cwd: work, onLine: installLine)
                 if r.contains("INSTALL OK") { return }
                 reason = Sideloader.installFailReason(r)
                 guard attempt < maxAttempts, Sideloader.isRetryableInstallFailure(reason) else { break }
                 log("Install attempt \(attempt) failed (\(reason)) — retrying…")
                 onInstall(0, "Retrying")
                 Thread.sleep(forTimeInterval: 1.5)
+            }
+            // The post-install verify couldn't find the app on the device — most often
+            // Developer Mode being off (the USB pre-check catches the common case, but a
+            // Wi-Fi-listed device answers the pre-check as .unknown and reaches here). Give
+            // the actionable instruction instead of a bare "not present".
+            if reason.lowercased().contains("developer mode") {
+                revealDeveloperMode(iPadUDID)
+                throw SideErr.fail("The app didn’t actually install on this device — Developer Mode may be turned off. \(developerModeHelp) (\(reason))")
             }
             throw SideErr.fail("Install failed: \(reason)")
         }
@@ -1203,7 +1215,10 @@ public struct Sideloader {
             // Direct-IP install: connect straight to the device's IP (beacon-supplied or
             // remembered), bypassing usbmux's flaky Bonjour discovery.
             log("Installing by direct IP \(ip)…")
-            let ipOut = try runStreaming(ipInstallPath(), [iPadUDID, ip, ipa.path], cwd: work, onLine: installLine)
+            // 4th arg = expected bundle id: the helper confirms it against installd's app list
+            // before reporting DIRECT-IP INSTALL OK, so a Wi-Fi install that didn't really land
+            // (Developer Mode off, install rejected) can't be recorded as a success.
+            let ipOut = try runStreaming(ipInstallPath(), [iPadUDID, ip, ipa.path, bundleID], cwd: work, onLine: installLine)
             if !ipOut.contains("DIRECT-IP INSTALL OK") {
                 if connectedDevices().contains(where: { $0.udid == iPadUDID }) {
                     // Still reachable via usbmux (cable, or Wi-Fi-listed) — let it route.
@@ -1211,6 +1226,12 @@ public struct Sideloader {
                     try usbInstall()
                 } else {
                     if let hint = Sideloader.wifiPairingHint(ipOut) { throw SideErr.fail(hint) }
+                    // A Wi-Fi/direct-IP install can't pre-check Developer Mode (the device
+                    // isn't on USB), so the post-install verify is where a dev-mode-off device
+                    // reveals itself — the app never lands. Surface the fix, not "not present".
+                    if ipOut.lowercased().contains("developer mode") {
+                        throw SideErr.fail("The app didn’t actually install on this device — Developer Mode may be turned off. \(developerModeHelp)")
+                    }
                     throw SideErr.fail("Wi-Fi install failed. Make sure the device is unlocked and on the same network, then try again. (\(Sideloader.installFailReason(ipOut)))")
                 }
             }

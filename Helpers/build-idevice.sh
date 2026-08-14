@@ -26,13 +26,17 @@ for r in libplist libimobiledevice-glue libusbmuxd libimobiledevice; do
   ( cd "$r" && ./autogen.sh --prefix="$PREFIX" --disable-static --without-cython && make -j4 && make install )
 done
 
-# the helper
+# the helpers: idevicehelper (USB) and idevice_ipinstall (direct-IP + heartbeat).
+# Both link the same libimobiledevice/libplist; idevice_ipinstall hand-declares the
+# symbols it uses (it builds its own network idevice_t), so it needs no extra headers.
 clang -arch arm64 -I"$PREFIX/include" "$ROOT/idevicehelper.c" \
   -L"$PREFIX/lib" -limobiledevice-1.0 -lplist-2.0 -o "$WORK/idevicehelper"
+clang -arch arm64 -I"$PREFIX/include" "$ROOT/idevice_ipinstall.c" \
+  -L"$PREFIX/lib" -limobiledevice-1.0 -lplist-2.0 -o "$WORK/idevice_ipinstall"
 
 # stage a relocatable set into ./idevice/
 S="$ROOT/idevice"; rm -rf "$S"; mkdir -p "$S"
-cp "$WORK/idevicehelper" "$S/"
+cp "$WORK/idevicehelper" "$WORK/idevice_ipinstall" "$S/"
 cp "$PREFIX"/lib/libimobiledevice-1.0.*.dylib "$PREFIX"/lib/libusbmuxd-*.dylib \
    "$PREFIX"/lib/libimobiledevice-glue-*.dylib "$PREFIX"/lib/libplist-2.0.*.dylib \
    "$OPENSSL"/lib/libssl.*.dylib "$OPENSSL"/lib/libcrypto.*.dylib "$S/" 2>/dev/null || true
@@ -40,7 +44,7 @@ cp "$PREFIX"/lib/libimobiledevice-1.0.*.dylib "$PREFIX"/lib/libusbmuxd-*.dylib \
 find "$S" -type l -delete
 cd "$S"
 for f in *.dylib; do install_name_tool -id "@rpath/$f" "$f" 2>/dev/null; done
-for f in idevicehelper *.dylib; do
+for f in idevicehelper idevice_ipinstall *.dylib; do
   otool -L "$f" | awk 'NR>1{print $1}' | while read dep; do
     case "$dep" in */prefix/lib/*|*/openssl@3/lib/*|*/opt/openssl*/*)
       install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$f" 2>/dev/null;; esac

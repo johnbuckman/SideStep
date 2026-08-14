@@ -113,7 +113,7 @@ static int cmd_uninstall(const char *udid, const char *bid) {
     return 3;
 }
 
-static int cmd_install(const char *udid, const char *ipa) {
+static int cmd_install(const char *udid, const char *ipa, const char *expect_bid) {
     idevice_t d = connect_dev(udid);
     if (!d) { printf(">>> INSTALL FAILED: no device\n"); return 2; }
     lockdownd_client_t ld = NULL;
@@ -176,12 +176,46 @@ static int cmd_install(const char *udid, const char *ipa) {
     g_err = 0; g_done = 0;
     instproxy_error_t e = instproxy_install(ip, remote, opts, status_cb, NULL);
     instproxy_client_options_free(opts);
-    if (e != INSTPROXY_E_SUCCESS) { printf(">>> INSTALL FAILED: could not start install (%d)\n", e); return 3; }
+    if (e != INSTPROXY_E_SUCCESS) { instproxy_client_free(ip); printf(">>> INSTALL FAILED: could not start install (%d)\n", e); return 3; }
     for (int ms = 0; !g_done && ms < 240000; ms += 50) usleep(50 * 1000);   // ≤4 min
-    instproxy_client_free(ip); ip = NULL;   // joins the status thread cleanly
-    if (g_done && !g_err) { printf(">>> INSTALL OK <<<\n"); return 0; }
-    printf(">>> INSTALL FAILED: %s\n", g_errmsg[0] ? g_errmsg : "no completion from installd (timed out)");
-    return 3;
+    if (!(g_done && !g_err)) {
+        instproxy_client_free(ip);   // joins the status thread cleanly
+        printf(">>> INSTALL FAILED: %s\n", g_errmsg[0] ? g_errmsg : "no completion from installd (timed out)");
+        return 3;
+    }
+    // Ground-truth verify on the still-open client: installd must actually list the bundle
+    // now. instproxy's own "Complete" is not proof the app landed — that same claim is what
+    // lied during the false-OK bug — so confirm against installd's app list (the oracle)
+    // before reporting OK, which is what the Mac side keys the tracked-app record on. No
+    // expected id passed → skip, staying backward-compatible.
+    if (expect_bid && expect_bid[0]) {
+        plist_t bopts = instproxy_client_options_new();
+        instproxy_client_options_add(bopts, "ApplicationType", "User", NULL);
+        plist_t apps = NULL;
+        instproxy_error_t be = instproxy_browse(ip, bopts, &apps);
+        instproxy_client_options_free(bopts);
+        int present = 0;
+        if (be == INSTPROXY_E_SUCCESS && apps) {
+            uint32_t n = plist_array_get_size(apps);
+            for (uint32_t i = 0; i < n; i++) {
+                plist_t app = plist_array_get_item(apps, i);
+                plist_t p = plist_dict_get_item(app, "CFBundleIdentifier");
+                char *b = NULL; if (p) plist_get_string_val(p, &b);
+                if (b && !strcmp(b, expect_bid)) present = 1;
+                if (b) free(b);
+                if (present) break;
+            }
+        }
+        if (apps) plist_free(apps);
+        if (!present) {
+            instproxy_client_free(ip);
+            printf(">>> INSTALL FAILED: %s not present on device after install (Developer Mode off, or install rejected)\n", expect_bid);
+            return 3;
+        }
+    }
+    instproxy_client_free(ip);
+    printf(">>> INSTALL OK <<<\n");
+    return 0;
 }
 
 // installd's ground-truth list of installed USER apps. This is the oracle the
@@ -246,7 +280,7 @@ static int cmd_appinfo(const char *udid, const char *bid) {
 
 int main(int argc, char **argv) {
     if (argc >= 2 && !strcmp(argv[1], "list")) return cmd_list();
-    if (argc >= 4 && !strcmp(argv[1], "install")) return cmd_install(argv[2], argv[3]);
+    if (argc >= 4 && !strcmp(argv[1], "install")) return cmd_install(argv[2], argv[3], argc >= 5 ? argv[4] : NULL);
     if (argc >= 4 && !strcmp(argv[1], "uninstall")) return cmd_uninstall(argv[2], argv[3]);
     if (argc >= 3 && !strcmp(argv[1], "apps")) return cmd_apps(argv[2]);
     if (argc >= 4 && !strcmp(argv[1], "appinfo")) return cmd_appinfo(argv[2], argv[3]);
