@@ -484,25 +484,51 @@ final class ProcessWatchdog: @unchecked Sendable {
     func cancel() { lock.lock(); done = true; lock.unlock() }
 }
 
+/// One-shot gate: runs the FIRST `run` body and drops every later one. Used to resume a
+/// racing continuation exactly once (resuming a CheckedContinuation twice traps), so whichever
+/// of `withTimeout`'s two racers gets there first wins and the loser is silently ignored.
+private final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func run(_ body: () -> Void) {
+        lock.lock()
+        if done { lock.unlock(); return }
+        done = true
+        lock.unlock()
+        body()
+    }
+}
+
 public struct Sideloader {
     /// Run an async step under a hard deadline. If `op` doesn't finish in time we throw
-    /// `SideErr.timeout` and cancel it, so a stuck Apple-API/network call can't wedge the
-    /// beacon updater — the device just retries on its next beacon. (Blocking subprocess
-    /// steps are additionally bounded by ProcessWatchdog, since cancellation alone can't
-    /// interrupt them.)
+    /// `SideErr.timeout`, so a stuck Apple-API/network call can't wedge the beacon updater —
+    /// the device just retries on its next beacon. (Blocking subprocess steps are additionally
+    /// bounded by ProcessWatchdog, since cancellation alone can't interrupt them.)
+    ///
+    /// DELIBERATELY UNSTRUCTURED. The obvious implementation — a `withThrowingTaskGroup` that
+    /// races `op` against a sleeper — does NOT work here: a structured group awaits *all* its
+    /// children before returning, so when `op` parks in an uncancellable `await` (a hung
+    /// ALTAppleAPI continuation, or a bare URLSession await that ignores cancellation) the group
+    /// never drains and this function never returns. That is exactly what pinned the beacon
+    /// `busy` latch until the process was restarted. Instead we race two detached Tasks through a
+    /// single continuation: the instant either finishes we resume and return, and we simply
+    /// ABANDON the loser. A genuinely wedged `op` keeps running orphaned, but it no longer blocks
+    /// the updater — `busy` is released and the next beacon is serviced.
     static func withTimeout<T: Sendable>(_ seconds: TimeInterval, _ label: String,
                                          _ op: @escaping @Sendable () async throws -> T) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await op() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw SideErr.timeout("\(label) timed out after \(Int(seconds))s — will retry later.")
+        let once = Once()
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+            let work = Task {
+                do { let v = try await op(); once.run { cont.resume(returning: v) } }
+                catch { once.run { cont.resume(throwing: error) } }
             }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else {
-                throw SideErr.timeout("\(label) produced no result")
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                once.run {
+                    work.cancel()   // best-effort; an uncancellable await ignores it — hence "abandon"
+                    cont.resume(throwing: SideErr.timeout("\(label) timed out after \(Int(seconds))s — will retry later."))
+                }
             }
-            return first
         }
     }
 
