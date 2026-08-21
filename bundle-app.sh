@@ -11,16 +11,23 @@ MAJ="${CUR%.*.*}"; REST="${CUR#*.}"; MIN="${REST%.*}"; PATCH="${REST#*.}"
 SHORT_VERSION="${MAJ}.${MIN}.$((PATCH + 1))"
 printf '%s' "$SHORT_VERSION" > VERSION.txt
 echo "version: $CUR → $SHORT_VERSION"
+# Universal by default so the app runs on both Apple Silicon and Intel Macs.
+# Override with SIDESTEP_ARCHS="--arch arm64" for a faster host-only dev build.
+ARCHS="${SIDESTEP_ARCHS:---arch arm64 --arch x86_64}"
 # Force a relink: swift build sometimes recompiles a changed module but skips
 # relinking the executable, which silently bundles a stale binary.
-rm -f "$(swift build --show-bin-path)/InstallerApp"
-swift build --product InstallerApp
-BINDIR=$(swift build --show-bin-path)
+rm -f "$(swift build $ARCHS --show-bin-path)/InstallerApp"
+swift build --product InstallerApp $ARCHS
+BINDIR=$(swift build $ARCHS --show-bin-path)
 APP="${1:-/Applications}/SideStep.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINDIR/InstallerApp" "$APP/Contents/MacOS/SideStep"
 cp -R "$BINDIR/OpenSSL.framework" "$APP/Contents/MacOS/OpenSSL.framework"
+# Universal SwiftPM builds emit rpath @executable_path/../lib, but the framework is
+# bundled next to the executable in MacOS/. Add @executable_path so @rpath/OpenSSL...
+# resolves (single-arch builds emitted @loader_path and didn't need this).
+install_name_tool -add_rpath @executable_path "$APP/Contents/MacOS/SideStep" 2>/dev/null || true
 cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 mkdir -p "$APP/Contents/Helpers"
 cp -R Helpers/idevice "$APP/Contents/Helpers/idevice"   # libimobiledevice device tools (no Python)

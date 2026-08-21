@@ -1,4 +1,8 @@
 #!/bin/bash
+# NOTE: arm64-ONLY and STALE (omits idevice_new_network_local.c that idevice_ipinstall
+# needs). For shipping builds use build-idevice-universal.sh, which produces a universal
+# (arm64 + x86_64) set so the helpers run on Intel Macs too.
+#
 # Build the bundled device helper from source (arm64) and stage it into ./idevice/.
 # Produces a self-contained set (helper + relocatable dylibs) that the .app bundles,
 # so SideStep needs no Python / pymobiledevice3 / external tools at runtime.

@@ -16,8 +16,12 @@ OUT="${1:-./dist}"
 mkdir -p "$OUT"
 
 echo "==> Building SideStepInstaller (release)"
-swift build --product SideStepInstaller -c release >/dev/null 2>&1 || swift build --product SideStepInstaller
-BINDIR=$(swift build --product SideStepInstaller -c release --show-bin-path 2>/dev/null || swift build --show-bin-path)
+# Universal by default so the Wizard/installer runs on both Apple Silicon and Intel
+# Macs (per-repo installers minted from this template inherit it). Override with
+# SIDESTEP_ARCHS="--arch arm64".
+ARCHS="${SIDESTEP_ARCHS:---arch arm64 --arch x86_64}"
+swift build --product SideStepInstaller -c release $ARCHS >/dev/null 2>&1 || swift build --product SideStepInstaller $ARCHS
+BINDIR=$(swift build --product SideStepInstaller -c release $ARCHS --show-bin-path 2>/dev/null || swift build $ARCHS --show-bin-path)
 
 STAGE=$(mktemp -d)
 APP="$STAGE/SideStepWizard.app"

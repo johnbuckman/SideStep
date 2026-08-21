@@ -21,14 +21,23 @@ OUT="${1:-./dist}"
 ENT="$PWD/SideStep.entitlements"
 
 echo "==> Building InstallerApp"
-swift build --product InstallerApp -c release >/dev/null 2>&1 || swift build --product InstallerApp
-BINDIR=$(swift build --product InstallerApp -c release --show-bin-path 2>/dev/null || swift build --show-bin-path)
+# Universal by default so the release runs on both Apple Silicon and Intel Macs.
+# The bundled Helpers/idevice stack + OpenSSL.framework are also universal (see
+# Helpers/build-idevice-universal.sh). Override with SIDESTEP_ARCHS="--arch arm64".
+ARCHS="${SIDESTEP_ARCHS:---arch arm64 --arch x86_64}"
+swift build --product InstallerApp -c release $ARCHS >/dev/null 2>&1 || swift build --product InstallerApp $ARCHS
+BINDIR=$(swift build --product InstallerApp -c release $ARCHS --show-bin-path 2>/dev/null || swift build $ARCHS --show-bin-path)
 
 STAGE=$(mktemp -d)
 APP="$STAGE/SideStep.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 cp "$BINDIR/InstallerApp" "$APP/Contents/MacOS/SideStep"
 cp -R "$BINDIR/OpenSSL.framework" "$APP/Contents/MacOS/OpenSSL.framework"
+# Universal SwiftPM builds emit rpath @executable_path/../lib, but the framework is
+# bundled next to the executable in MacOS/. Add @executable_path so @rpath/OpenSSL...
+# resolves. (Single-arch builds emitted @loader_path and didn't need this — the
+# universal switch is exactly what made the app fail to launch.)
+install_name_tool -add_rpath @executable_path "$APP/Contents/MacOS/SideStep" 2>/dev/null || true
 [ -f icon/AppIcon.icns ] && cp icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 [ -f /Users/john/altstore-fork/AppIcon.icns ] && cp /Users/john/altstore-fork/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp -R Helpers/idevice "$APP/Contents/Helpers/idevice"
