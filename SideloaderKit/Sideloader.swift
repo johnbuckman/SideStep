@@ -1451,6 +1451,55 @@ public struct Sideloader {
         }
     }
 
+    /// Is version string `a` newer than `b`? Compared component-wise as integers
+    /// with MISSING TRAILING COMPONENTS TREATED AS ZERO, so "1.1" and "1.1.0" are
+    /// EQUAL (not a < b) — important because the catalog derives versions from git
+    /// tags ("v1.1.0" → "1.1.0") while the app's CFBundleShortVersionString may be
+    /// "1.1"; a naive .numeric compare would see 1.1.0 > 1.1 and reinstall forever.
+    /// A non-empty version is always newer than an unknown (empty) one.
+    static func isNewerVersion(_ a: String, than b: String) -> Bool {
+        let a = a.trimmingCharacters(in: .whitespaces), b = b.trimmingCharacters(in: .whitespaces)
+        guard !a.isEmpty else { return false }
+        guard !b.isEmpty else { return true }
+        func parts(_ v: String) -> [Int] {
+            v.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+        }
+        let pa = parts(a), pb = parts(b)
+        for i in 0..<max(pa.count, pb.count) {
+            let x = i < pa.count ? pa[i] : 0
+            let y = i < pb.count ? pb[i] : 0
+            if x != y { return x > y }
+        }
+        return false   // all components equal → not newer
+    }
+
+    /// Daily sweep companion to `checkGitHubUpdates`, for apps installed from an
+    /// AltStore/http CATALOG (not a GitHub repo). A catalog install pins `origin`
+    /// to the version-specific downloadURL, so on its own it never moves forward —
+    /// this re-resolves each such app in the live catalog by bundle id, and if the
+    /// catalog now advertises a newer `version`, reinstalls from the catalog's
+    /// CURRENT downloadURL (updating the tracked origin + version).
+    public static func checkCatalogUpdates(log: @escaping (String) -> Void) async {
+        let apps = Tracked.all().filter { $0.githubRepo.isEmpty && $0.origin.hasPrefix("http") }
+        guard !apps.isEmpty else { return }
+        let catalog = await AltStoreCatalog.allApps(force: true)   // bypass the 10-min cache
+        guard !catalog.isEmpty else { return }
+        let reachable = Set(connectedDevices().map { $0.udid })
+        for t in apps {
+            guard let app = catalog.first(where: { $0.bundleIdentifier == t.origBundleID }),
+                  let latest = app.version, !app.downloadURL.isEmpty else { continue }
+            guard isNewerVersion(latest, than: t.version) else { continue }
+            guard reachable.contains(t.udid) else {
+                log("Catalog: \(app.name) has \(latest) but \(t.deviceName.isEmpty ? t.udid : t.deviceName) isn't reachable — will retry"); continue
+            }
+            log("Catalog: \(app.name) → \(latest) (was \(t.version.isEmpty ? "unknown" : t.version))")
+            var updated = t
+            updated.origin = app.downloadURL          // point refreshOne at the CURRENT build
+            do { let r = try await refreshOne(updated, log: log); log("Catalog update → \(r)") }
+            catch { log("Catalog update failed for \(app.name): \(error)") }
+        }
+    }
+
     /// Uninstall from the device, delete its App ID (frees a free-account slot), untrack.
     public static func removeApp(_ t: TrackedApp, log: @escaping (String) -> Void) async {
         let out = (try? run(helperPath(), ["uninstall", t.udid, t.installedBundleID])) ?? ""

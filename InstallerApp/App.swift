@@ -54,12 +54,16 @@ final class RefreshDaemon {
             Task { try? await Sideloader.refreshAll(log: { print("[SideStep refresh] \($0)") }) }
         }
 
-        // Daily GitHub-release sweep (separate from the 7-day signing refresh): pulls
-        // the newest .ipa for every GitHub-tracked app whose repo has a newer tag.
+        // Daily update sweep (separate from the 7-day signing refresh): pulls the
+        // newest .ipa for every GitHub-tracked app whose repo has a newer tag, and
+        // every catalog-tracked app whose AltStore source advertises a newer version.
         let ghKey = "sidestep.lastGithubCheck"
         if now - UserDefaults.standard.double(forKey: ghKey) > 24 * 3600 {
             UserDefaults.standard.set(now, forKey: ghKey)
-            Task { await Sideloader.checkGitHubUpdates(log: { print("[SideStep github] \($0)") }) }
+            Task {
+                await Sideloader.checkGitHubUpdates(log: { print("[SideStep github] \($0)") })
+                await Sideloader.checkCatalogUpdates(log: { print("[SideStep catalog] \($0)") })
+            }
         }
     }
 }
@@ -1055,12 +1059,14 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     }
     func removeAltStoreSource(_ url: String) { AltStoreCatalog.removeSource(url); reloadAltStoreSources(); loadAltStore(force: true) }
 
-    /// Manually check every GitHub-tracked app for a newer release now.
+    /// Manually check every tracked app (GitHub repo AND AltStore catalog) for a
+    /// newer version now.
     func checkGitHubUpdatesNow() {
-        status = "Checking GitHub apps for updates…"
+        status = "Checking apps for updates…"
         Task.detached { [weak self] in
             await Sideloader.checkGitHubUpdates(log: { print("[SideStep github] \($0)") })
-            await MainActor.run { self?.tracked = Tracked.all(); self?.status = "GitHub update check complete." }
+            await Sideloader.checkCatalogUpdates(log: { print("[SideStep catalog] \($0)") })
+            await MainActor.run { self?.tracked = Tracked.all(); self?.status = "Update check complete." }
         }
     }
 
@@ -1457,7 +1463,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("Launch SideStep at login (keeps apps auto-refreshed)", isOn: Binding(get: { m.launchAtLogin }, set: { m.setLaunchAtLogin($0) }))
                     Button("Refresh all apps now") { m.refreshAllNow() }.disabled(m.installing)
-                    Button("Check GitHub apps for updates now") { m.checkGitHubUpdatesNow() }.disabled(m.installing)
+                    Button("Check apps for updates now") { m.checkGitHubUpdatesNow() }.disabled(m.installing)
                     Button("Check for SideStep Update now") { Task { await UpdateChecker.shared.check(userInitiated: true) } }
                     Button(m.githubHasToken ? "GitHub token (saved) — change…" : "Add a GitHub token (faster search)…") { m.promptGitHubToken() }
                     Button("Show Debug Log…") { DebugWindow.show() }
