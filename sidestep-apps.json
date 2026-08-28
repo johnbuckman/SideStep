@@ -75,6 +75,20 @@
       ]
     },
     {
+      "name": "dcamp",
+      "bundleIdentifier": "com.decentespresso.dcamp",
+      "developerName": "Decent Espresso",
+      "localizedDescription": "The native app for the Decent Espresso community forum (“the Diaspora”). Read and post to the forums, chat and DM other owners, react to posts, get AI summaries of what’s new, and read every thread automatically translated into your language. A companion to de1app. Requires iOS 17.",
+      "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/dcamp-icon.png",
+      "versions": [
+        {
+          "version": "1.15",
+          "downloadURL": "https://github.com/johnbuckman/dcamp-ios/releases/download/v1.15/dcamp.ipa",
+          "size": 2381635
+        }
+      ]
+    },
+    {
       "name": "Decent Timer",
       "bundleIdentifier": "com.decentespresso.kitchentimer",
       "developerName": "John Buckman",
