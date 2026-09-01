@@ -8,7 +8,7 @@
       "name": "Stay on Track",
       "bundleIdentifier": "com.johnbuckman.stayontrack",
       "developerName": "John Buckman",
-      "localizedDescription": "A fully-offline hiking companion that keeps you on your intended trail — a British voice calls out \"Left / Right / Straight\" at every trail junction where another path joins, a rising tone warns when you stray off-trail, and OpenStreetMap maps work in airplane mode. Requires iOS 17.",
+      "localizedDescription": "A fully-offline hiking companion that keeps you on your intended trail — a British voice calls out \"Left / Right / Straight\" as you approach every junction where another path joins, and speaks how far you have strayed if you wander off-trail. It also shows nearby restaurants and public toilets along the route (with the time you will reach each), plus offline OpenStreetMap maps that work in airplane mode. Requires iOS 17.",
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/stayontrack-icon.png",
       "versions": [
         {
