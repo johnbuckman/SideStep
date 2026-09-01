@@ -12,9 +12,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/stayontrack-icon.png",
       "versions": [
         {
-          "version": "1.1.1",
-          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v1.1.1/StayOnTrack.ipa",
-          "size": 3660278
+          "version": "1.1.4",
+          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v1.1.4/StayOnTrack.ipa",
+          "size": 3698343
         }
       ]
     },
@@ -54,9 +54,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decent-icon.png",
       "versions": [
         {
-          "version": "0.8.3",
-          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.8.3/decaid-ios-unsigned-0.8.3.ipa",
-          "size": 52123912
+          "version": "0.8.4",
+          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.8.4/decaid-ios-unsigned-0.8.4.ipa",
+          "size": 52191984
         }
       ]
     },
