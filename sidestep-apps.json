@@ -68,9 +68,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/de1app-icon.png",
       "versions": [
         {
-          "version": "1.46.1.159",
-          "downloadURL": "https://github.com/decentespresso/de1app/releases/download/v1.46.1.159/de1app-ios.ipa",
-          "size": 95527125
+          "version": "1.46.1.163",
+          "downloadURL": "https://github.com/decentespresso/de1app/releases/download/v1.46.1.163/de1app-ios.ipa",
+          "size": 95819695
         }
       ]
     },
