@@ -26,9 +26,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/magnatune-icon.png",
       "versions": [
         {
-          "version": "1.0.2",
-          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.0.2/Magnatune-v1.0.2-unsigned.ipa",
-          "size": 7175909
+          "version": "1.0.7",
+          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.0.7/Magnatune-v1.0.7-unsigned.ipa",
+          "size": 7232024
         }
       ]
     },
@@ -96,9 +96,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/timer-icon.png",
       "versions": [
         {
-          "version": "1.1-beta",
-          "downloadURL": "https://github.com/johnbuckman/Kitchen-timer-for-old-iPads/releases/download/v1.1-beta/DecentTimer-1.1-beta.ipa",
-          "size": 127190
+          "version": "1.2-beta",
+          "downloadURL": "https://github.com/johnbuckman/Kitchen-timer-for-old-iPads/releases/download/v1.2-beta/DecentTimer-1.2-beta.ipa",
+          "size": 129720
         }
       ]
     }
