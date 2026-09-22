@@ -96,9 +96,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/timer-icon.png",
       "versions": [
         {
-          "version": "1.0-beta",
-          "downloadURL": "https://github.com/johnbuckman/Kitchen-timer-for-old-iPads/releases/download/v1.0-beta/DecentTimer-1.0-beta.ipa",
-          "size": 180448
+          "version": "1.1-beta",
+          "downloadURL": "https://github.com/johnbuckman/Kitchen-timer-for-old-iPads/releases/download/v1.1-beta/DecentTimer-1.1-beta.ipa",
+          "size": 127190
         }
       ]
     }
