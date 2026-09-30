@@ -8,7 +8,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 OUT="$HERE/../Helpers/BeaconInject.dylib"
 mkdir -p "$(dirname "$OUT")"
-xcrun clang -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 -fobjc-arc -O \
+xcrun clang -arch arm64 -isysroot "$SDK" -mios-version-min=13.0 -fobjc-arc -O \
   -framework Foundation -framework UIKit -framework CoreGraphics \
   -framework UserNotifications -framework BackgroundTasks -framework Network \
   -dynamiclib -o "$OUT" "$HERE/beacon_inject.m" \

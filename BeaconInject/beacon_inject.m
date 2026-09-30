@@ -232,7 +232,12 @@ static void sendBeacon(void) {   // fire-and-forget (automatic path, no UI)
 
 // Beacon and then listen (~4 min) for the Mac's STATUS / PROGRESS replies on the
 // same socket. onStatus + onProgress are dispatched to the main thread.
-static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int pct, int eta), void (^onNow)(NSString *)) {
+// onEnd(timedOut, staged): fired on the main thread when the listen loop ends.
+//   timedOut = the ~240s window elapsed with NO terminal reply (relaunch / up-to-date /
+//              failed / PROGRESS 100) — the case that used to leave the card frozen at "6/6".
+//   staged   = the Mac sent an EXPIRES line, i.e. a freshly-signed build was delivered and is
+//              waiting for the app to exit — so on a timeout we can honestly say "reopen to finish".
+static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int pct, int eta), void (^onNow)(NSString *), void (^onEnd)(BOOL timedOut, BOOL staged)) {
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     if (s < 0) { return; }
     int on = 1; setsockopt(s, SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
@@ -240,6 +245,7 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     sendBeaconOn(s);
     NSDate *start = [NSDate date]; BOOL sawAny = NO, noReplyRecorded = NO;
+    BOOL brokeTerminal = NO, stagedSeen = NO;
     while (-start.timeIntervalSinceNow < 240) {
         char buf[600]; struct sockaddr_in from; socklen_t fl = sizeof from;
         ssize_t n = recvfrom(s, buf, sizeof buf - 1, 0, (struct sockaddr *)&from, &fl);
@@ -249,15 +255,23 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
                 sawAny = YES;
                 NSString *t = [[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
                 NSString *lc = t.lowercaseString;
-                if ([lc containsString:@"complete"] || [lc containsString:@"relaunch"]) recordResult(t, YES);
-                else if ([lc containsString:@"failed"]) recordResult(t, NO);
+                BOOL relaunch = [lc containsString:@"relaunch"];   // a real update was applied
+                BOOL complete = relaunch || [lc containsString:@"complete"];   // terminal-success (incl. "already up to date")
+                BOOL failed   = [lc containsString:@"failed"];
+                if (complete) recordResult(t, YES);
+                else if (failed) recordResult(t, NO);
                 dispatch_async(dispatch_get_main_queue(), ^{ onStatus(t); });
-                if ([lc containsString:@"failed"]) break;
+                // A "relaunch" terminal drives the exit-to-apply path too (belt-and-suspenders
+                // with PROGRESS 100), so a lost 100 packet can't strand the update. A bare
+                // "complete" (up-to-date) is terminal but must NOT exit — nothing was installed.
+                if (relaunch) { dispatch_async(dispatch_get_main_queue(), ^{ onProgress(100, 0); }); brokeTerminal = YES; break; }
+                if (complete || failed) { brokeTerminal = YES; break; }
             } else if (strncmp(buf, "PROGRESS ", 9) == 0) {
                 sawAny = YES;
                 int pct = -1, eta = -1; sscanf(buf + 9, "%d %d", &pct, &eta);
                 if (pct >= 100) recordResult(@"Update delivered (100%).", YES);
                 dispatch_async(dispatch_get_main_queue(), ^{ onProgress(pct, eta); });
+                if (pct >= 100) { brokeTerminal = YES; break; }   // onProgress(100) schedules exit; stop listening
             } else if (strncmp(buf, "HOST ", 5) == 0) {
                 sawAny = YES;
                 recordHost([[NSString stringWithUTF8String:buf + 5] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
@@ -265,7 +279,7 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
                 sawAny = YES;
                 recordSigner([[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
             } else if (strncmp(buf, "EXPIRES ", 8) == 0) {
-                sawAny = YES;   // new signing valid until — the update is staged, pending our exit
+                sawAny = YES; stagedSeen = YES;   // new signing valid until — the update is staged, pending our exit
                 markUpdatePending([[NSString stringWithUTF8String:buf + 8] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]);
             } else if (strncmp(buf, "NOW ", 4) == 0) {
                 sawAny = YES;   // fine-grained current-action detail for the "Now: …" line
@@ -278,6 +292,7 @@ static void beaconAndTrack(void (^onStatus)(NSString *), void (^onProgress)(int 
         }
     }
     close(s);
+    if (onEnd) dispatch_async(dispatch_get_main_queue(), ^{ onEnd(!brokeTerminal, stagedSeen); });
 }
 
 // ---------- expiry notification ----------
@@ -302,6 +317,45 @@ static void rescheduleExpiryNotification(void) {
     [c addNotificationRequest:[UNNotificationRequest requestWithIdentifier:NOTIF_ID content:ct trigger:tr] withCompletionHandler:nil];
 }
 
+// A lightweight, self-dismissing banner shown WITHOUT the vitals card. When SideStep updates
+// an app, iOS must terminate the running app to swap its bundle — so from the user's seat the
+// app just "closed on its own." This toast makes that non-mysterious: the automatic beacon path
+// shows it the moment the Mac reports an update is being delivered, so the user knows why the
+// app is about to close and reopen. Thread-safe (hops to main); no-ops if there's no active
+// window (e.g. app already backgrounded).
+static void sidestepToast(NSString *msg) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *win = nil;
+        for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
+            if (![sc isKindOfClass:UIWindowScene.class]) continue;
+            if (sc.activationState != UISceneActivationStateForegroundActive) continue;
+            for (UIWindow *w in ((UIWindowScene *)sc).windows) if (w.isKeyWindow) { win = w; break; }
+            if (win) break;
+        }
+        if (!win) return;
+        for (UIView *v in win.subviews) if (v.tag == 0x51DE) [v removeFromSuperview];  // one at a time
+        CGFloat W = win.bounds.size.width, cardW = MIN(W - 32, 360), H = 66;
+        UIView *toast = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, -H, cardW, H)];
+        toast.tag = 0x51DE;
+        toast.backgroundColor = [UIColor colorWithWhite:0.11 alpha:0.96];
+        toast.layer.cornerRadius = 14; toast.clipsToBounds = YES;
+        toast.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+        UILabel *l = [[UILabel alloc] initWithFrame:CGRectInset(toast.bounds, 14, 8)];
+        l.numberOfLines = 2; l.textColor = UIColor.whiteColor;
+        l.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+        l.text = msg;
+        l.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [toast addSubview:l];
+        [win addSubview:toast];
+        CGFloat top = win.safeAreaInsets.top + 8;
+        [UIView animateWithDuration:0.35 animations:^{ toast.frame = CGRectMake((W - cardW)/2, top, cardW, H); }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [UIView animateWithDuration:0.3 animations:^{ toast.alpha = 0; }
+                             completion:^(BOOL f){ [toast removeFromSuperview]; }];
+        });
+    });
+}
+
 // Automatic (no-UI) beacon that ALSO listens briefly and PERSISTS the outcome,
 // so a background / launch auto-update leaves a record the popup can show later.
 // Runs off the main thread; calls `done` on the main thread when finished.
@@ -314,6 +368,14 @@ static void autoBeaconTracked(int maxSec, void (^done)(void)) {
         setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
         sendBeaconOn(s);
         NSDate *start = [NSDate date]; BOOL sawAny = NO, terminal = NO;
+        __block BOOL toasted = NO;   // captured+mutated by the toast block below
+        // Show the "an update is happening" banner exactly once, the moment we see real update
+        // activity (bytes in flight, or a relaunch applied) — NOT a bare "already up to date".
+        NSString *appNm = NSBundle.mainBundle.infoDictionary[@"CFBundleDisplayName"] ?: @"This app";
+        void (^toastUpdating)(void) = ^{
+            if (toasted) return; toasted = YES;
+            sidestepToast([NSString stringWithFormat:@"SideStep is updating %@ — it may briefly close and reopen.", appNm]);
+        };
         while (-start.timeIntervalSinceNow < maxSec && !terminal) {
             char buf[600]; ssize_t n = recvfrom(s, buf, sizeof buf - 1, 0, NULL, NULL);
             if (n <= 0) continue;
@@ -323,9 +385,11 @@ static void autoBeaconTracked(int maxSec, void (^done)(void)) {
                 NSString *t = [[NSString stringWithUTF8String:buf + 7] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
                 NSString *lc = t.lowercaseString;
                 if ([lc containsString:@"failed"]) { recordResult(t, NO); beaconLog([NSString stringWithFormat:@"Mac: %@", t]); terminal = YES; }
-                else if ([lc containsString:@"complete"] || [lc containsString:@"relaunch"]) { recordResult(t, YES); beaconLog([NSString stringWithFormat:@"Mac: %@", t]); terminal = YES; }
+                else if ([lc containsString:@"relaunch"]) { toastUpdating(); recordResult(t, YES); beaconLog([NSString stringWithFormat:@"Mac: %@", t]); terminal = YES; }
+                else if ([lc containsString:@"complete"]) { recordResult(t, YES); beaconLog([NSString stringWithFormat:@"Mac: %@", t]); terminal = YES; }
             } else if (strncmp(buf, "PROGRESS ", 9) == 0) {
                 sawAny = YES; int pct = -1; sscanf(buf + 9, "%d", &pct);
+                if (pct >= 0) toastUpdating();   // real bytes are being delivered → an update is underway
                 if (pct >= 100) { recordResult(@"Update delivered (100%).", YES); beaconLog(@"update delivered (100%)"); terminal = YES; }
             } else if (strncmp(buf, "EXPIRES ", 8) == 0) {
                 sawAny = YES;
@@ -608,6 +672,8 @@ static void tcpStream(NSString *ip, NSString *req, void (^onLine)(NSString *)) {
 @property(nonatomic, weak) UIProgressView *progressView;
 @property(nonatomic, weak) UILabel *pctLabel;
 @property(nonatomic, weak) UILabel *nowLabel;   // fine-grained "Now: …" line above Hide
+@property(nonatomic, weak) UIActivityIndicatorView *spinner;   // stopped when the update loop ends
+@property(nonatomic, weak) UIButton *dismissButton;   // "Hide" while running → "Close" once the check finishes
 @property(nonatomic, assign) BOOL exiting;
 @end
 @implementation BeaconVitals
@@ -901,7 +967,7 @@ static NSString *fmtEta(int s) {
     t.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold]; t.textColor = [UIColor colorWithWhite:0.1 alpha:1];
     [card addSubview:t];
     UIActivityIndicatorView *spin = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    spin.color = UIColor.systemBlueColor; spin.center = CGPointMake(cardW/2, 70); [spin startAnimating]; [card addSubview:spin];
+    spin.color = UIColor.systemBlueColor; spin.center = CGPointMake(cardW/2, 70); [spin startAnimating]; [card addSubview:spin]; self.spinner = spin;
     UILabel *st = [[UILabel alloc] initWithFrame:CGRectMake(20, 92, cardW - 40, 44)];
     st.numberOfLines = 2; st.textAlignment = NSTextAlignmentCenter;
     st.font = [UIFont systemFontOfSize:16]; st.textColor = [UIColor colorWithWhite:0.3 alpha:1];
@@ -920,7 +986,7 @@ static NSString *fmtEta(int s) {
     now.textColor = [UIColor colorWithWhite:0.55 alpha:1]; now.lineBreakMode = NSLineBreakByTruncatingTail;
     now.text = @""; [card addSubview:now]; self.nowLabel = now;
     UIButton *cls = styledButton(@"Hide", NO, self, @selector(closeUpdating));
-    cls.frame = CGRectMake(cardW/2 - 70, cardH - 56, 140, 44); [card addSubview:cls];
+    cls.frame = CGRectMake(cardW/2 - 70, cardH - 56, 140, 44); [card addSubview:cls]; self.dismissButton = cls;
     [self.overlay addSubview:card]; self.updatingCard = card;
 
     __weak BeaconVitals *ws = self;
@@ -928,7 +994,22 @@ static NSString *fmtEta(int s) {
         beaconAndTrack(
           ^(NSString *status) { if (ws.statusLabel) ws.statusLabel.text = status; },
           ^(int p, int eta) { [ws onProgress:p eta:eta]; },
-          ^(NSString *now) { if (ws.nowLabel) ws.nowLabel.text = [@"Now: " stringByAppendingString:now]; });
+          ^(NSString *now) { if (ws.nowLabel) ws.nowLabel.text = [@"Now: " stringByAppendingString:now]; },
+          ^(BOOL timedOut, BOOL staged) {
+              // The listen loop ended. If we're already exiting to apply the update, leave the
+              // card alone. Otherwise stop the spinner so the card never looks frozen, and on a
+              // timeout (no terminal reply) tell the user the honest state instead of leaving
+              // "6/6 Installing on your device" spinning forever.
+              if (ws.exiting) return;
+              [ws.spinner stopAnimating];
+              // The check is over and the card is now static — "Hide" (which implies work
+              // continuing in the background) becomes "Close".
+              [ws.dismissButton setTitle:@"Close" forState:UIControlStateNormal];
+              if (!timedOut) return;   // clean terminal (up-to-date / failed) — message already set
+              if (ws.statusLabel) ws.statusLabel.text = staged
+                  ? @"Update installed — reopen the app to finish applying it."
+                  : @"Couldn’t confirm the update finished. Make sure SideStep is running on your Mac, then tap Update again.";
+          });
     });
 }
 

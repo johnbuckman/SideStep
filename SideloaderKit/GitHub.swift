@@ -128,8 +128,38 @@ public enum GitHub {
         return "\(parts[0])/\(parts[1])"
     }
 
+    /// Parse a GitHub release-asset download URL into (owner/name, tag). Used to auto-record a
+    /// tracked app's repo when it was installed straight from a release asset URL, so future
+    /// refreshes follow NEW releases instead of re-downloading that one pinned URL forever.
+    /// e.g. https://github.com/owner/name/releases/download/v1.2.3/App.ipa → ("owner/name","v1.2.3")
+    public static func repoAndTag(fromReleaseURL url: String) -> (repo: String, tag: String)? {
+        guard let r = url.range(of: "github.com/") else { return nil }
+        let parts = url[r.upperBound...].split(separator: "/").map(String.init)
+        guard parts.count >= 6, parts[2] == "releases", parts[3] == "download",
+              !parts[0].isEmpty, !parts[1].isEmpty, !parts[4].isEmpty else { return nil }
+        return ("\(parts[0])/\(parts[1])", parts[4])
+    }
+
     /// The newest release (releases are newest-first) that has an `.ipa` asset.
-    public static func latestIPA(repo: String) async -> IPARelease? {
+    private static let ipaCacheLock = NSLock()
+    private static var ipaCache: [String: (rel: IPARelease?, at: Date)] = [:]
+
+    /// Newest release (releases are newest-first) that has an `.ipa` asset.
+    /// `maxAge` > 0 returns a recent cached result to THROTTLE repeated probes — the RefreshDaemon
+    /// sweep re-checks every repo each run (and runs back-to-back when devices flap), and every
+    /// beacon checks via `beaconReinstallIsRedundant`, which together can blow GitHub's 60-req/hr
+    /// unauthenticated budget. The user-facing install path passes 0 (always fresh) so a
+    /// just-published release is picked up immediately; every real fetch refreshes the cache.
+    public static func latestIPA(repo: String, maxAge: TimeInterval = 0) async -> IPARelease? {
+        if maxAge > 0 {
+            ipaCacheLock.lock(); let hit = ipaCache[repo]; ipaCacheLock.unlock()
+            if let hit, Date().timeIntervalSince(hit.at) < maxAge { return hit.rel }
+        }
+        let fetched = await fetchLatestIPA(repo: repo)
+        ipaCacheLock.lock(); ipaCache[repo] = (fetched, Date()); ipaCacheLock.unlock()
+        return fetched
+    }
+    private static func fetchLatestIPA(repo: String) async -> IPARelease? {
         guard let arr = await apiJSON("https://api.github.com/repos/\(repo)/releases") as? [[String: Any]] else { return nil }
         for rel in arr {
             guard let tag = rel["tag_name"] as? String, let assets = rel["assets"] as? [[String: Any]] else { continue }

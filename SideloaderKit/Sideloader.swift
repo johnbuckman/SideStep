@@ -377,6 +377,30 @@ public enum Tracked {
     }
 }
 
+/// Remembers app builds that a specific device can NEVER run (e.g. an iPad-only app on an
+/// iPhone → installd's `DeviceFamilyNotSupported`). Without this the beacon cascade and the
+/// RefreshDaemon re-download, re-sign and re-fail the same build on every pass — which pinned
+/// the "busy" lock (so the user's own "Update app now" got "Still updating — hang on…") and
+/// burned Apple's re-sign / device-registration quota. Keyed by (udid|bundle) → the failing
+/// build's key; a NEW build (different tag/version → different key) is retried automatically.
+enum IncompatibleStore {
+    static let path = SideStepSupportDir + "/incompatible.json"
+    private static func load() -> [String: String] {
+        (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: URL(fileURLWithPath: path)))) ?? [:]
+    }
+    private static func save(_ d: [String: String]) {
+        try? FileManager.default.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(d) { try? data.write(to: URL(fileURLWithPath: path)) }
+    }
+    private static func k(_ udid: String, _ bundle: String) -> String { "\(udid)|\(bundle)" }
+    static func isKnownBad(udid: String, bundle: String, buildKey: String) -> Bool {
+        load()[k(udid, bundle)] == buildKey
+    }
+    static func markBad(udid: String, bundle: String, buildKey: String) {
+        var d = load(); d[k(udid, bundle)] = buildKey; save(d)
+    }
+}
+
 // MARK: - Download progress
 
 /// Session delegate for `Sideloader.downloadFile`: reports byte progress (throttled to
@@ -499,6 +523,28 @@ private final class Once: @unchecked Sendable {
     }
 }
 
+/// Process-global async mutex so only ONE device install runs at a time across every caller.
+/// Every install path — the beacon updater (refreshOne), the RefreshDaemon sweep (refreshAll),
+/// manual installs, and the beacon cascade — funnels through `Sideloader.install()`. Without
+/// this gate a user-tapped beacon install and a daemon refresh could hit the SAME device
+/// concurrently, and iOS aborts one with "IXSimpleInstaller canceling existing coordinator
+/// (Coordinator superseded)" — which surfaced on the phone as an endless "Still updating —
+/// hang on…" followed by a failure. FIFO, and each install releases the gate the instant it
+/// finishes, so a user tap waits at most one in-flight app-install (not a whole refreshAll sweep).
+actor InstallGate {
+    static let shared = InstallGate()
+    private var held = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func acquire() async {
+        if !held { held = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func release() {
+        if waiters.isEmpty { held = false }
+        else { waiters.removeFirst().resume() }   // hand the gate straight to the next waiter
+    }
+}
+
 public struct Sideloader {
     /// Run an async step under a hard deadline. If `op` doesn't finish in time we throw
     /// `SideErr.timeout`, so a stuck Apple-API/network call can't wedge the beacon updater —
@@ -588,6 +634,11 @@ public struct Sideloader {
         if let cwd { p.currentDirectoryURL = cwd }
         if let env { var e = ProcessInfo.processInfo.environment; env.forEach { e[$0] = $1 }; p.environment = e }
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+        // Release the pipe's two FDs as soon as we return, independent of when ARC deallocs the
+        // Pipe (the Process retains it, and on a long-lived dispatch block the pool may not drain
+        // for a long time). Without this, run() — called every RefreshDaemon tick — bleeds FDs
+        // until the process hits EMFILE and every install/refresh fails. See RefreshDaemon.start.
+        defer { try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
         try p.run()
         let watchdog = ProcessWatchdog(p, seconds: timeout)
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -637,6 +688,9 @@ public struct Sideloader {
         if let cwd { p.currentDirectoryURL = cwd }
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         let h = pipe.fileHandleForReading
+        // Same FD-leak guard as run() — close both ends on return so a wedged/long-lived caller
+        // can't strand the subprocess's pipe FDs and march the process toward EMFILE.
+        defer { try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
         try p.run()
         let watchdog = ProcessWatchdog(p, seconds: timeout)
         var full = "", buf = ""
@@ -1017,6 +1071,10 @@ public struct Sideloader {
                                confirm: @escaping (_ app: String, _ bundleID: String) async -> Bool = { _, _ in true },
                                log: @escaping (String) -> Void,
                                onInstall: @escaping @Sendable (_ percent: Int, _ phase: String) -> Void = { _, _ in }) async throws -> String {
+        // Serialize ALL device installs process-wide (see InstallGate) so the beacon updater and
+        // the RefreshDaemon can never install to the same device at once ("Coordinator superseded").
+        await InstallGate.shared.acquire()
+        defer { Task { await InstallGate.shared.release() } }
         // Anti-piracy screening (before any Apple API work, and before we rewrite the
         // bundle id): refuse known pirate sources/files outright; confirm a known paid app.
         switch Blocklist.shared.screen(appPath: appPath, origin: source) {
@@ -1027,6 +1085,31 @@ public struct Sideloader {
             if await confirm(app, bid) { log("\(app): user confirmed they have the rights — continuing") }
             else { throw SideErr.fail("Install cancelled — \(app) looks like a paid App Store app.") }
         }
+
+        // ── Downgrade guard (runs BEFORE any device work — critical) ──────────────────────
+        // The device install below terminates the running app as its FIRST step, then preflights
+        // on-device. So a stale/incompatible build kills the app the user is using *before* it
+        // fails. Root-caused from a real incident: a shared per-bundle cache got clobbered back to
+        // an old Magnatune v1.0.2 (MinimumOSVersion 17.0) by another device's pinned install, and
+        // that stale build was then reinstalled over the working v1.0.7 on an iOS-15 phone — each
+        // attempt killed the running app, then failed `DeviceOSVersionTooLow`, then retried in a
+        // loop. Refuse to install a build OLDER than the one we already recorded as installed on
+        // THIS device, before touching Apple's API or the device — so no app is ever killed for it.
+        // (Matched by origBundleID+udid because the team-scoped installedBundleID isn't known until
+        // the team is fetched below; a genuine upgrade or equal version passes straight through.)
+        let incomingPlist = (appPath as NSString).appendingPathComponent("Info.plist")
+        let incomingVersion = plistValue("CFBundleShortVersionString", incomingPlist) ?? ""
+        let incomingOrigBundle = plistValue("CFBundleIdentifier", incomingPlist) ?? ""
+        if !incomingVersion.isEmpty, !incomingOrigBundle.isEmpty,
+           let priorInstall = Tracked.all().first(where: { $0.origBundleID == incomingOrigBundle && $0.udid == iPadUDID }),
+           !priorInstall.version.isEmpty,
+           isNewerVersion(priorInstall.version, than: incomingVersion) {
+            let where_ = deviceLabel(iPadUDID)
+            let msg = "\(priorInstall.name.isEmpty ? incomingOrigBundle : priorInstall.name): skipping — this build is \(incomingVersion) but \(where_) already has the newer \(priorInstall.version). Refusing to downgrade (a stale build must not replace a working install)."
+            log(msg)
+            throw SideErr.fail(msg)
+        }
+
         let api = ALTAppleAPI.sharedAPI
 
         let teams: [ALTTeam] = try await cont { api.fetchTeams(for: account, session: session, completionHandler: $0) }
@@ -1281,6 +1364,12 @@ public struct Sideloader {
         rec.version = appVersion
         rec.origin = source   // how it was found (http source URL, or the .ipa/.app path)
         if let github { rec.githubRepo = github.repo; rec.githubTag = github.tag }
+        else if let (repo, tag) = GitHub.repoAndTag(fromReleaseURL: source) {
+            // Installed directly from a GitHub release-asset URL (e.g. an AltStore catalog entry)
+            // rather than the by-repo flow — record the repo so refreshes track NEW releases
+            // instead of re-downloading this exact pinned URL forever.
+            rec.githubRepo = repo; rec.githubTag = tag
+        }
         Tracked.upsert(rec)
         AppIconCache.extract(fromApp: cachePath, bundleID: bundleID)   // best-effort icon for the UI
         try? fm.removeItem(at: work)
@@ -1399,10 +1488,49 @@ public struct Sideloader {
     public static func beaconReinstallIsRedundant(_ t: TrackedApp) async -> Bool {
         guard let li = t.lastInstalled, Date().timeIntervalSince1970 - li < 24 * 3600 else { return false }
         if !t.githubRepo.isEmpty,
-           let rel = await GitHub.latestIPA(repo: t.githubRepo), rel.tag != t.githubTag {
+           // Cached briefly: a device re-beacons on every launch, so back-to-back beacons for the
+           // same app collapse to one GitHub probe. 60s keeps a just-published release fresh enough.
+           let rel = await GitHub.latestIPA(repo: t.githubRepo, maxAge: 60), rel.tag != t.githubTag {
             return false   // a newer release exists → the ipa changed → reinstall
         }
         return true
+    }
+
+    /// A device-side install failure that will recur for the SAME build no matter how often we
+    /// retry — so we should remember it and stop re-signing+re-pushing. Today: installd's
+    /// `DeviceFamilyNotSupported` (e.g. an iPad-only build on an iPhone).
+    static func isPermanentDeviceFailure(_ error: Error) -> Bool {
+        let s = "\(error)".lowercased()
+        return s.contains("devicefamilynotsupported") || s.contains("not built to support this device family")
+            // installd rejects a build whose MinimumOSVersion exceeds the device's OS
+            // ("DeviceOSVersionTooLow" / "The system version is lower than the minimum OS version").
+            // This recurs for the SAME build forever (an old min-iOS-17 build on an iOS-15 phone),
+            // so remember it and stop re-signing+re-pushing — otherwise every sweep terminates the
+            // running app to attempt an install that can never succeed. A new build (different key,
+            // e.g. one rebuilt for a lower deployment target) is retried automatically.
+            || s.contains("deviceosversiontoolow")
+            || s.contains("system version is lower than the minimum")
+    }
+
+    /// Run one install for `t`, but (a) skip a build already known incompatible with this device
+    /// and (b) remember a fresh permanent incompatibility so the cascade/daemon don't re-fail it
+    /// forever. `buildKey` identifies the exact build (tag/version); a new build retries on its own.
+    private static func guardedInstall(_ t: TrackedApp, udid: String, buildKey: String,
+                                       log: @escaping (String) -> Void,
+                                       _ body: () async throws -> String) async throws -> String {
+        if IncompatibleStore.isKnownBad(udid: udid, bundle: t.installedBundleID, buildKey: buildKey) {
+            let where_ = t.deviceName.isEmpty ? "this device" : t.deviceName
+            let msg = "\(t.name) can’t run on \(where_) (unchanged since it last failed) — skipped until a new build is released."
+            log(msg); return msg
+        }
+        do { return try await body() }
+        catch {
+            if isPermanentDeviceFailure(error) {
+                IncompatibleStore.markBad(udid: udid, bundle: t.installedBundleID, buildKey: buildKey)
+                log("\(t.name): not compatible with this device — won’t retry until a new build ships (\(error.localizedDescription))")
+            }
+            throw error
+        }
     }
 
     public static func refreshOne(_ t: TrackedApp, log: @escaping (String) -> Void,
@@ -1411,25 +1539,40 @@ public struct Sideloader {
         guard let (account, session) = await ensureSession(t.appleID, log: log) else {
             throw SideErr.fail("Couldn't sign in to \(t.appleID) automatically. Open SideStep and sign in again — you may just need to enter a texted code.")
         }
-        // GitHub-sourced apps always push the CURRENT latest release (keeps the device
-        // on the newest build), updating the remembered tag.
-        if !t.githubRepo.isEmpty, let rel = await GitHub.latestIPA(repo: t.githubRepo) {
+        // Pick the build to install + a stable key identifying it (so guardedInstall can skip a
+        // build this device already proved it can't run, and retry once the build changes).
+        let buildKey: String
+        let body: () async throws -> String
+        if !t.githubRepo.isEmpty {
+            // GitHub-tracked: the latest release IS the build. If GitHub is unreachable, FAIL —
+            // do NOT silently fall through to the old pinned `origin` URL, which reinstalled a
+            // stale version and reported success (the "update never gets the newest release" bug).
+            guard let rel = await GitHub.latestIPA(repo: t.githubRepo) else {
+                throw SideErr.fail("Couldn't reach GitHub to check \(t.githubRepo) for the latest release — will retry.")
+            }
             if rel.tag != t.githubTag { log("GitHub: \(t.githubRepo) → \(rel.tag) (was \(t.githubTag.isEmpty ? "none" : t.githubTag))") }
-            let ipa = try await GitHub.downloadIPA(rel, onProgress: onProgress)
-            defer { try? FileManager.default.removeItem(atPath: ipa) }
-            return try await installFromIPA(account: account, session: session, filePath: ipa,
-                                            iPadUDID: t.udid, github: (t.githubRepo, rel.tag), log: log, onInstall: onInstall)
+            buildKey = "gh:\(t.githubRepo)@\(rel.tag)"
+            body = {
+                let ipa = try await GitHub.downloadIPA(rel, onProgress: onProgress)
+                defer { try? FileManager.default.removeItem(atPath: ipa) }
+                return try await installFromIPA(account: account, session: session, filePath: ipa,
+                                                iPadUDID: t.udid, github: (t.githubRepo, rel.tag), log: log, onInstall: onInstall)
+            }
+        } else if t.origin.hasPrefix("http") {
+            // AltStore/http source → re-download the current build from the source each time.
+            buildKey = "src:\(t.origin)"
+            body = {
+                let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
+                try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+                let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log, onProgress: onProgress)
+                return try await install(account: account, session: session, appPath: appPath.path, source: t.origin, iPadUDID: t.udid, log: log, onInstall: onInstall)
+            }
+        } else {
+            // Local .ipa/.app → re-sign the cached copy (one-time content, just kept alive).
+            buildKey = "file:\(t.source)"
+            body = { try await installFromIPA(account: account, session: session, filePath: t.source, iPadUDID: t.udid, log: log, onInstall: onInstall) }
         }
-        // AltStore/http source → re-download the current build from the source each time,
-        // so the app tracks the source's latest version.
-        if t.origin.hasPrefix("http") {
-            let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-            let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log, onProgress: onProgress)
-            return try await install(account: account, session: session, appPath: appPath.path, source: t.origin, iPadUDID: t.udid, log: log, onInstall: onInstall)
-        }
-        // Local .ipa/.app → re-sign the cached copy (one-time content, just kept alive).
-        return try await installFromIPA(account: account, session: session, filePath: t.source, iPadUDID: t.udid, log: log, onInstall: onInstall)
+        return try await guardedInstall(t, udid: t.udid, buildKey: buildKey, log: log, body)
     }
 
     /// Daily sweep: for every GitHub-sourced tracked app whose repo now has a newer
@@ -1568,17 +1711,27 @@ public struct Sideloader {
                 if udid.isEmpty { log("no device connected for \(t.name) — skipping"); continue }
                 do {
                     log("refreshing \(t.name) [\(appleID)]…")
-                    if !t.githubRepo.isEmpty, let rel = await GitHub.latestIPA(repo: t.githubRepo) {
-                        let ipa = try await GitHub.downloadIPA(rel); defer { try? FileManager.default.removeItem(atPath: ipa) }
-                        _ = try await installFromIPA(account: pair.0, session: pair.1, filePath: ipa, iPadUDID: udid, github: (t.githubRepo, rel.tag), log: log)
+                    let buildKey: String
+                    let body: () async throws -> String
+                    if !t.githubRepo.isEmpty {
+                        // GitHub unreachable → skip (retry next sweep); never fall back to a stale pinned URL.
+                        // Cached up to 10 min: the daemon re-checks every repo each sweep and runs
+                        // back-to-back when devices flap — without this it exhausts the 60/hr budget.
+                        guard let rel = await GitHub.latestIPA(repo: t.githubRepo, maxAge: 600) else { log("\(t.name): couldn't reach GitHub — will retry"); continue }
+                        buildKey = "gh:\(t.githubRepo)@\(rel.tag)"
+                        body = { let ipa = try await GitHub.downloadIPA(rel); defer { try? FileManager.default.removeItem(atPath: ipa) }
+                                 return try await installFromIPA(account: pair.0, session: pair.1, filePath: ipa, iPadUDID: udid, github: (t.githubRepo, rel.tag), log: log) }
                     } else if t.origin.hasPrefix("http") {
-                        let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
-                        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-                        let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log)
-                        _ = try await install(account: pair.0, session: pair.1, appPath: appPath.path, source: t.origin, iPadUDID: udid, log: log)
+                        buildKey = "src:\(t.origin)"
+                        body = { let work = FileManager.default.temporaryDirectory.appendingPathComponent("isl-\(UUID().uuidString)")
+                                 try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+                                 let appPath = try await downloadAndUnzipApp(t.origin, into: work, log: log)
+                                 return try await install(account: pair.0, session: pair.1, appPath: appPath.path, source: t.origin, iPadUDID: udid, log: log) }
                     } else {
-                        _ = try await installFromIPA(account: pair.0, session: pair.1, filePath: t.source, iPadUDID: udid, log: log)
+                        buildKey = "file:\(t.source)"
+                        body = { try await installFromIPA(account: pair.0, session: pair.1, filePath: t.source, iPadUDID: udid, log: log) }
                     }
+                    _ = try await guardedInstall(t, udid: udid, buildKey: buildKey, log: log, body)
                 } catch { log("refresh \(t.name) FAILED: \(error.localizedDescription)") }
             }
         }

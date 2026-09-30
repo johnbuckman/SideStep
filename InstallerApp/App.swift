@@ -27,7 +27,16 @@ final class RefreshDaemon {
         q.async { [weak self] in
             CrashLog.log("RefreshDaemon: loop started")
             while true {
-                self?.tick()
+                // The loop block never returns, so libdispatch's per-block autorelease pool
+                // never drains — without this, every tick's autoreleased Process/Pipe (each
+                // Process retains its stdout/stderr Pipe, whose deinit closes 2 FDs) piles up
+                // for the life of the process. Over days that leaks thousands of pipe FDs until
+                // the process hits EMFILE ("Too many open files"), at which point every
+                // beacon-triggered bundle copy fails and devices see "update failed — try later"
+                // until SideStep is restarted. Draining per tick keeps FD/mem use flat.
+                autoreleasepool {
+                    self?.tick()
+                }
                 Thread.sleep(forTimeInterval: 25)
             }
         }
@@ -1419,7 +1428,13 @@ struct ContentView: View {
                         Button("Sign in") { m.login() }.keyboardShortcut(.defaultAction).disabled(m.loginStage != .idle)
                         if !m.accounts.isEmpty { Button("Cancel") { m.cancelLogin() } }
                         if m.loginStage == .working { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
+                    }
+                    // Show the full Apple error on its own line — wrapping, not truncated.
+                    // In an HStack the caption clipped to one line ("…couldn't be read beca…").
+                    if !m.loginStatus.isEmpty {
                         Text(m.loginStatus).font(.caption).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
                     Text("Create free Apple accounts at [icloud.com](https://www.icloud.com/) — each free account can install **3 apps**. A $99/year Apple Developer subscription removes the limit.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1733,7 +1748,13 @@ struct AddAccountView: View {
                 Button("Sign in") { m.login() }.keyboardShortcut(.defaultAction).disabled(m.loginStage != .idle)
                 Button("Cancel") { m.cancelAddAccount() }.keyboardShortcut(.cancelAction)
                 if m.loginStage == .working { ProgressView().scaleEffect(0.6).frame(width: 14, height: 14) }
+            }
+            // Show the full Apple error on its own line — wrapping, not truncated.
+            // In an HStack the caption clipped to one line ("…couldn't be read beca…").
+            if !m.loginStatus.isEmpty {
                 Text(m.loginStatus).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
             Text("Create free Apple accounts at [icloud.com](https://www.icloud.com/) — each free account can install **3 apps**. A $99/year Apple Developer subscription removes the limit.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

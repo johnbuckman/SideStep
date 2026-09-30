@@ -233,11 +233,21 @@ public final class BeaconListener: NSObject {
                 _ = try await Sideloader.withTimeout(360, "Updating \(app.name)") {
                     try await Sideloader.refreshOne(app, log: statusLog)
                 }
-                // The USB path doesn't stream upload PROGRESS, so the on-device beacon
-                // never reaches the pct>=100 that triggers its exit-to-apply-the-swap.
-                // Send a final 100% on success so the app relaunches into the new build
-                // no matter which transport was used.
-                self.sendProgress(pct: 100, eta: 0, to: from)
+                // Completion is the ONE signal that makes the device exit-and-relaunch to
+                // apply the new build (the "n/6" STATUS labels are not terminal). This used to
+                // be a SINGLE best-effort UDP PROGRESS 100 — and the USB path doesn't stream
+                // upload PROGRESS at all, so it never reached pct>=100. If that lone packet
+                // dropped on Wi-Fi (or landed after the device's ~240s listen window), the
+                // device never exited and its "Updating…" card froze at "6/6 Installing on your
+                // device" forever. Fix: send the completion REDUNDANTLY (survives UDP loss) as
+                // BOTH PROGRESS 100 and a terminal "relaunch" STATUS, so either path on the
+                // device finishes the update. ("relaunch", not just "complete" — the up-to-date
+                // skip path below says "complete" and must NOT trigger an exit.)
+                for _ in 0..<5 {
+                    self.sendProgress(pct: 100, eta: 0, to: from)
+                    self.sendStatus("Update complete — relaunch to apply.", to: from)
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
                 // Cascade: while we have this device reachable, refresh other apps on it so
                 // rarely-opened apps don't silently expire just because only one app beacons.
                 // (10167702445) But ONLY those actually near expiry — refreshing EVERY sibling
