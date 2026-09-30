@@ -24,6 +24,12 @@ public final class BeaconListener: NSObject {
     private var lastPush: [String: Date] = [:]   // per (udid|bundleid), debounce the packet burst
     private var log: (String) -> Void = { _ in }
 
+    /// Fired after a beacon-driven (re)install updates the tracked store, so the Mac UI can reload
+    /// its in-memory app list and show the just-installed version. Without this, a wireless
+    /// self-update lands on the device and `Tracked.upsert` records the new version on disk, but
+    /// the running app's cached list keeps showing the old version until relaunch.
+    public var onInstalled: (@Sendable () -> Void)?
+
     public func start(log: @escaping (String) -> Void) {
         q.async {
             guard self.source == nil else { return }
@@ -233,6 +239,9 @@ public final class BeaconListener: NSObject {
                 _ = try await Sideloader.withTimeout(360, "Updating \(app.name)") {
                     try await Sideloader.refreshOne(app, log: statusLog)
                 }
+                // The install just updated the tracked version on disk — tell the UI to reload so
+                // the app's version label reflects the build we just pushed, not the old cache.
+                self.onInstalled?()
                 // Completion is the ONE signal that makes the device exit-and-relaunch to
                 // apply the new build (the "n/6" STATUS labels are not terminal). This used to
                 // be a SINGLE best-effort UDP PROGRESS 100 — and the USB path doesn't stream
@@ -266,6 +275,7 @@ public final class BeaconListener: NSObject {
                         do { _ = try await Sideloader.withTimeout(360, "Updating \(t.name)") { try await Sideloader.refreshOne(t, log: { self.touchActivity(); self.log("cascade[\(t.name)]: \($0)") }) } ; self.log("cascade: refreshed \(t.name)") }
                         catch { self.log("cascade: \(t.name) failed: \(error)") }
                     }
+                    self.onInstalled?()   // cascade updated more tracked versions — reload the UI too
                 }
             }
             catch { self.sendStatus("Update failed — will retry later.", to: from); self.log("beacon refresh failed: \(error)") }

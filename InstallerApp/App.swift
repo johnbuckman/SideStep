@@ -2042,6 +2042,12 @@ struct InstallerApp: App {
             RefreshDaemon.shared.start()
             dlog("post-launch: RefreshDaemon started")
             dlog("post-launch: starting LAN services (only if there are apps to serve)…")
+            // A wireless (beacon) self-update records the new version on disk via Tracked.upsert,
+            // but the running UI holds a cached snapshot — reload it so the version label updates
+            // as soon as the beacon finishes, not only after a relaunch or a manual refresh.
+            BeaconListener.shared.onInstalled = {
+                Task { @MainActor in AppModel.shared.tracked = Tracked.all() }
+            }
             LANServices.startIfNeeded()   // gated so a fresh SideStep never triggers the Local Network prompt
             dlog("post-launch: LAN services evaluated")
             UpdateChecker.shared.checkIfDue()   // daily GitHub-Releases self-update check
