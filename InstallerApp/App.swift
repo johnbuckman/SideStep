@@ -103,15 +103,73 @@ let SideStepLogPath = (("~/Library/Logs/SideStep.log") as NSString).expandingTil
 // Held for the process lifetime so the diagnostics pipe's read end never closes.
 private var diagPipe: Pipe?
 private var diagLogFH: FileHandle?
+// One serial queue owns every write to the log file AND every trim, so trimming (which
+// rewrites the file in place) can never race an incoming log write.
+private let diagLogQ = DispatchQueue(label: "com.decent.sidestep.logwrite")
+private var diagLineBuf = Data()          // accumulates partial lines between pipe reads
+private var diagTrimTimer: DispatchSourceTimer?
+
+private let diagStampFmt: DateFormatter = {
+    let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f
+}()
+
+/// How long log lines are kept. Older lines are dropped by `trimSideStepLog`.
+let SideStepLogMaxAge: TimeInterval = 48 * 3600   // 48 hours
+
+/// Keep only the last `maxAge` of log lines. Each line is written with a leading
+/// "[yyyy-MM-dd HH:mm:ss] " stamp, so trimming is just: drop lines whose stamp is older than
+/// the cutoff (a stampless continuation line inherits its predecessor's keep/drop decision).
+/// Runs on `diagLogQ` so it never races the writer. A pathologically large file (e.g. the old
+/// un-rotated multi-GB log, or a verbosity blow-up) is emptied outright instead of being read
+/// into memory. Rewrites through the live FileHandle so subsequent appends land correctly.
+func trimSideStepLog(maxAge: TimeInterval = SideStepLogMaxAge) {
+    diagLogQ.async {
+        let path = SideStepLogPath
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let size = (attrs[.size] as? NSNumber)?.uint64Value, size > 0 else { return }
+        func rewrite(_ s: String) {
+            let data = Data(s.utf8)
+            if let fh = diagLogFH {
+                fh.truncateFile(atOffset: 0); try? fh.seek(toOffset: 0); try? fh.write(contentsOf: data)
+            } else {
+                try? data.write(to: URL(fileURLWithPath: path))
+            }
+        }
+        // Never pull a huge file into memory — just start fresh.
+        if size > 200 * 1024 * 1024 {
+            rewrite("[\(diagStampFmt.string(from: Date()))] (log truncated — exceeded 200 MB size cap)\n")
+            return
+        }
+        guard let data = fm.contents(atPath: path),
+              let text = String(data: data, encoding: .utf8) else { return }
+        let cutoff = Date().addingTimeInterval(-maxAge)
+        let allLines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var kept: [Substring] = []; var keeping = false
+        for line in allLines {
+            if line.first == "[", let close = line.firstIndex(of: "]") {
+                let stamp = line[line.index(after: line.startIndex)..<close]
+                if let d = diagStampFmt.date(from: String(stamp)) { keeping = d >= cutoff }
+            }
+            if keeping { kept.append(line) }
+        }
+        if kept.count != allLines.count { rewrite(kept.joined(separator: "\n")) }
+    }
+}
 
 func installDiagnosticsLog() {
     setvbuf(stdout, nil, _IONBF, 0); setvbuf(stderr, nil, _IONBF, 0)
-    // Tee stdout+stderr → the on-screen debug log AND the file, so nothing is silent.
     let fm = FileManager.default
-    if !fm.fileExists(atPath: SideStepLogPath) {
-        try? fm.createDirectory(atPath: (SideStepLogPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        fm.createFile(atPath: SideStepLogPath, contents: nil)
+    let dir = (SideStepLogPath as NSString).deletingLastPathComponent
+    try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    // Before opening the file for append, drop any legacy/oversized content (the old log had no
+    // rotation and could be gigabytes). No FileHandle is open yet, so a plain write is safe.
+    if let attrs = try? fm.attributesOfItem(atPath: SideStepLogPath),
+       let size = (attrs[.size] as? NSNumber)?.uint64Value, size > 8 * 1024 * 1024 {
+        try? Data().write(to: URL(fileURLWithPath: SideStepLogPath))
     }
+    if !fm.fileExists(atPath: SideStepLogPath) { fm.createFile(atPath: SideStepLogPath, contents: nil) }
     guard let logFH = FileHandle(forWritingAtPath: SideStepLogPath) else {
         AltSignLogging.setLogging(true); return
     }
@@ -124,9 +182,26 @@ func installDiagnosticsLog() {
     pipe.fileHandleForReading.readabilityHandler = { h in
         let d = h.availableData
         guard !d.isEmpty else { return }
-        try? logFH.write(contentsOf: d)
-        DebugLog.shared.write(d)
+        DebugLog.shared.write(d)                       // on-screen log: raw, unchanged
+        diagLogQ.async {                               // file: timestamp each complete line
+            diagLineBuf.append(d)
+            var out = Data()
+            while let nl = diagLineBuf.firstIndex(of: 0x0A) {
+                let line = diagLineBuf.subdata(in: diagLineBuf.startIndex..<nl)
+                diagLineBuf.removeSubrange(diagLineBuf.startIndex...nl)
+                out.append(Data("[\(diagStampFmt.string(from: Date()))] ".utf8))
+                out.append(line); out.append(0x0A)
+            }
+            if !out.isEmpty { try? logFH.write(contentsOf: out) }
+        }
     }
+    // Trim now (purges anything older than 48h that survived the startup reset), then hourly.
+    trimSideStepLog()
+    let timer = DispatchSource.makeTimerSource(queue: diagLogQ)
+    timer.schedule(deadline: .now() + 3600, repeating: 3600)
+    timer.setEventHandler { trimSideStepLog() }
+    timer.resume()
+    diagTrimTimer = timer
     AltSignLogging.setLogging(true)
     let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     print("\n=== SideStep \(v) launched \(Date()) ===")
