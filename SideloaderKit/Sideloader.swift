@@ -401,6 +401,29 @@ enum IncompatibleStore {
     }
 }
 
+/// The latest AVAILABLE version of an app (its newest GitHub release / catalog build), kept
+/// independently of any device. This is the "version cache": refreshing it only talks to the
+/// source, so the UI can show what an auto-updating app WILL be and a manual refresh works with
+/// no device connected. Per-device *installed* versions still live on each TrackedApp; this is the
+/// target they converge to. Keyed by the app's original bundle id (shared across teams/devices).
+public enum LatestVersionStore {
+    static let path = SideStepSupportDir + "/latest.json"
+    private static func load() -> [String: String] {
+        (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: URL(fileURLWithPath: path)))) ?? [:]
+    }
+    private static func save(_ d: [String: String]) {
+        try? FileManager.default.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(d) { try? data.write(to: URL(fileURLWithPath: path)) }
+    }
+    public static func version(forOrigBundle b: String) -> String? {
+        let v = load()[b]; return (v?.isEmpty == false) ? v : nil
+    }
+    public static func set(_ v: String, forOrigBundle b: String) {
+        guard !v.isEmpty else { return }
+        var d = load(); d[b] = v; save(d)
+    }
+}
+
 // MARK: - Download progress
 
 /// Session delegate for `Sideloader.downloadFile`: reports byte progress (throttled to
@@ -1600,7 +1623,7 @@ public struct Sideloader {
     /// tags ("v1.1.0" → "1.1.0") while the app's CFBundleShortVersionString may be
     /// "1.1"; a naive .numeric compare would see 1.1.0 > 1.1 and reinstall forever.
     /// A non-empty version is always newer than an unknown (empty) one.
-    static func isNewerVersion(_ a: String, than b: String) -> Bool {
+    public static func isNewerVersion(_ a: String, than b: String) -> Bool {
         let a = a.trimmingCharacters(in: .whitespaces), b = b.trimmingCharacters(in: .whitespaces)
         guard !a.isEmpty else { return false }
         guard !b.isEmpty else { return true }
@@ -1622,6 +1645,35 @@ public struct Sideloader {
     /// this re-resolves each such app in the live catalog by bundle id, and if the
     /// catalog now advertises a newer `version`, reinstalls from the catalog's
     /// CURRENT downloadURL (updating the tracked origin + version).
+    /// Refresh ONLY the "latest available version" for an app, straight from its source — the
+    /// GitHub release tag or the AltStore catalog — with NO device involved. Records it in
+    /// LatestVersionStore so the UI reflects the newest build even when every device is offline.
+    /// Returns the version (leading "v" stripped), or nil if the source couldn't be reached.
+    @discardableResult
+    public static func refreshLatestVersion(for t: TrackedApp, log: @escaping (String) -> Void = { _ in }) async -> String? {
+        var version: String? = nil
+        if !t.githubRepo.isEmpty {
+            if let rel = await GitHub.latestIPA(repo: t.githubRepo) {
+                version = rel.tag.hasPrefix("v") ? String(rel.tag.dropFirst()) : rel.tag
+            } else {
+                log("\(t.name): couldn't reach GitHub (\(t.githubRepo)) to check the latest version.")
+            }
+        } else {
+            // AltStore/catalog app (or a pinned URL whose bundle id the catalog also lists).
+            let catalog = await AltStoreCatalog.allApps(force: true)
+            if let app = catalog.first(where: { $0.bundleIdentifier == t.origBundleID }), let v = app.version, !v.isEmpty {
+                version = v
+            } else {
+                log("\(t.name): not in the catalog and no GitHub repo — can't check the latest version.")
+            }
+        }
+        if let v = version, !v.isEmpty {
+            LatestVersionStore.set(v, forOrigBundle: t.origBundleID)
+            log("\(t.name): latest available is \(v).")
+        }
+        return version
+    }
+
     public static func checkCatalogUpdates(log: @escaping (String) -> Void) async {
         let apps = Tracked.all().filter { $0.githubRepo.isEmpty && $0.origin.hasPrefix("http") }
         guard !apps.isEmpty else { return }

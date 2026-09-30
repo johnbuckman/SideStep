@@ -1157,21 +1157,90 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                 Task { @MainActor in self.reportInstallProgress(percent: percent, phase: phase) }
             }
             var ok = 0, fail = 0, last = "", lastErr = ""
+            var failLines: [String] = []
             for app in queue {
                 do { last = try await Sideloader.refreshOne(app, log: log, onProgress: onProgress, onInstall: onInstall); ok += 1 }
-                catch { fail += 1; lastErr = error.localizedDescription; print("[SideStep] refresh failed for \(app.name): \(error)") }
+                catch { fail += 1; lastErr = error.localizedDescription
+                        failLines.append("• \(app.name): \(error.localizedDescription)")
+                        print("[SideStep] refresh failed for \(app.name): \(error)") }
             }
             let ok2 = ok, fail2 = fail
             await MainActor.run {
                 let msg: String
                 if queue.count > 1 {
+                    // List WHY each failed, not just a count (a bare "N failed" was a mystery).
                     msg = fail2 == 0 ? "Refreshed \(ok2) apps on \(devName)."
-                                     : "Refreshed \(ok2) of \(queue.count) on \(devName) — \(fail2) failed."
+                                     : "Refreshed \(ok2) of \(queue.count) on \(devName) — \(fail2) failed:\n" + failLines.joined(separator: "\n")
                 } else {
                     msg = fail2 == 0 ? last : "Refresh failed: \(t.name) — \(lastErr)"
                 }
                 self.status = msg
                 self.finishInstallProgress(ok: fail2 == 0, message: msg)
+                self.tracked = Tracked.all(); self.installing = false
+            }
+        }
+    }
+
+    /// The version to show for an app group: the NEWEST of the latest-available build (from the
+    /// device-independent version cache) and whatever any device actually has installed — so the
+    /// label reflects the current build, not an arbitrary (possibly stale) device's copy.
+    func displayVersion(_ devices: [TrackedApp]) -> String? {
+        let orig = devices.first?.origBundleID ?? ""
+        var candidates = devices.map(\.version).filter { !$0.isEmpty }
+        if let latest = LatestVersionStore.version(forOrigBundle: orig) { candidates.append(latest) }
+        return candidates.max(by: { Sideloader.isNewerVersion($1, than: $0) })
+    }
+
+    /// Refresh an app EVERYWHERE. First refresh its latest-available version straight from the
+    /// source — no device needed (the "version cache"), so this ALWAYS runs and the label updates
+    /// even with every device offline. Then reinstall to each device the app is on that's currently
+    /// reachable, and report every device's outcome (updated / not connected / the actual error) so
+    /// a failure is never a mystery.
+    func refreshAppEverywhere(_ t: TrackedApp) {
+        installing = true
+        status = "Checking \(t.name) for updates…"
+        beginInstallProgress(title: "Updating “\(t.name)”")
+        Task.detached { [weak self] in
+            guard let self else { return }
+            let log: @Sendable (String) -> Void = { m in
+                print("[SideStep] \(m)")
+                let line = String(m.split(separator: "\n").first.map(String.init)?.prefix(160) ?? "")
+                Task { @MainActor in
+                    self.status = line
+                    if !line.isEmpty { self.ipStatus = line }
+                    if !line.contains("Downloading") { self.clearDownloadProgress() }
+                }
+            }
+            let onProgress: @Sendable (Int64, Int64) -> Void = { r, tot in Task { @MainActor in self.reportDownload(received: r, total: tot) } }
+            let onInstall: @Sendable (Int, String) -> Void = { p, ph in Task { @MainActor in self.reportInstallProgress(percent: p, phase: ph) } }
+
+            // 1) Device-independent: refresh the latest AVAILABLE version from the source.
+            let latest = await Sideloader.refreshLatestVersion(for: t, log: log)
+
+            // 2) Reinstall to every reachable device this app is on; collect a per-device outcome.
+            let entries = Tracked.all().filter { $0.origBundleID == t.origBundleID }
+            let reachable = Set(Sideloader.connectedDevices().map { $0.udid })
+            var lines: [String] = []
+            for e in entries {
+                let dev = e.deviceName.isEmpty ? (DeviceIPCache.name(for: e.udid) ?? e.udid) : e.deviceName
+                if !reachable.contains(e.udid) {
+                    lines.append("• \(dev): not connected — will update when it reconnects")
+                    continue
+                }
+                do {
+                    _ = try await Sideloader.refreshOne(e, log: log, onProgress: onProgress, onInstall: onInstall)
+                    lines.append("• \(dev): updated" + (latest.map { " to \($0)" } ?? ""))
+                } catch {
+                    lines.append("• \(dev): \(error.localizedDescription)")
+                }
+            }
+            await MainActor.run {
+                let head = latest.map { "\(t.name): latest available is \($0)." }
+                    ?? "\(t.name): couldn't check the latest version — source unreachable."
+                let body = lines.isEmpty ? "No installs on record for this app yet." : lines.joined(separator: "\n")
+                // Success if we at least learned the latest version; per-device issues are listed below it.
+                self.finishInstallProgress(ok: latest != nil, message: head + "\n" + body)
+                self.status = head
                 self.tracked = Tracked.all(); self.installing = false
             }
         }
@@ -1311,7 +1380,7 @@ struct ContentView: View {
         // stale cache (e.g. an old version the label still shows) is corrected on demand rather
         // than waiting for the next 7-day sweep. Only when it actually auto-updates.
         .contentShape(Rectangle())
-        .onTapGesture { if t.autoUpdates && !m.installing { m.refreshApp(t) } }
+        .onTapGesture { if t.autoUpdates && !m.installing { m.refreshAppEverywhere(t) } }
         .onHover { inside in
             guard t.autoUpdates else { return }
             if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
@@ -1391,7 +1460,7 @@ struct ContentView: View {
                                   HStack(spacing: 6) {
                                     appIcon(bundleID: grp.devices.first?.installedBundleID ?? "")
                                     Text(grp.name).font(.callout)
-                                    if let v = grp.devices.first?.version, !v.isEmpty {
+                                    if let v = m.displayVersion(grp.devices), !v.isEmpty {
                                         Text("v\(v)").font(.caption2).foregroundStyle(.secondary)
                                     }
                                     if let repo = grp.devices.first?.githubRepo, !repo.isEmpty,
