@@ -1306,6 +1306,19 @@ struct ContentView: View {
         }
         .font(.caption2)
         .foregroundStyle(t.autoUpdates ? Color.green : Color.secondary)
+        // Click "Keeps up to date" to force a refresh NOW: re-pull the latest build from its
+        // source and reinstall, which also rewrites SideStep's cached bundle for that app — so a
+        // stale cache (e.g. an old version the label still shows) is corrected on demand rather
+        // than waiting for the next 7-day sweep. Only when it actually auto-updates.
+        .contentShape(Rectangle())
+        .onTapGesture { if t.autoUpdates && !m.installing { m.refreshApp(t) } }
+        .onHover { inside in
+            guard t.autoUpdates else { return }
+            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .help(t.autoUpdates
+              ? "Click to check for updates and refresh this app’s cached build now"
+              : "Installed once; not auto-updated")
     }
 
     /// The installed app's real icon (cached at install), or the generic symbol.
@@ -1432,9 +1445,13 @@ struct ContentView: View {
                     // Show the full Apple error on its own line — wrapping, not truncated.
                     // In an HStack the caption clipped to one line ("…couldn't be read beca…").
                     if !m.loginStatus.isEmpty {
+                        // A definite width (.frame maxWidth:.infinity) — NOT .fixedSize — so the
+                        // wrapping, selectable error text can't oscillate. .textSelection combined
+                        // with .fixedSize(horizontal:false) made SwiftUI loop forever in
+                        // LayoutEngineBox.sizeThatFits (main-thread spin, whole app hung on sign-in).
                         Text(m.loginStatus).font(.caption).foregroundStyle(.red)
-                            .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Text("Create free Apple accounts at [icloud.com](https://www.icloud.com/) — each free account can install **3 apps**. A $99/year Apple Developer subscription removes the limit.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1752,9 +1769,11 @@ struct AddAccountView: View {
             // Show the full Apple error on its own line — wrapping, not truncated.
             // In an HStack the caption clipped to one line ("…couldn't be read beca…").
             if !m.loginStatus.isEmpty {
+                // See the note at the other loginStatus site: a definite width instead of
+                // .fixedSize(horizontal:false)+.textSelection, which looped in SwiftUI layout.
                 Text(m.loginStatus).font(.caption).foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Text("Create free Apple accounts at [icloud.com](https://www.icloud.com/) — each free account can install **3 apps**. A $99/year Apple Developer subscription removes the limit.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
