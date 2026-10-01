@@ -1759,7 +1759,21 @@ public struct Sideloader {
             for t in apps {
                 // re-sign only once past 70% of the signing window (2 days left on a 7-day free profile)
                 if let li = t.lastInstalled, now - li < 0.7 * Double(t.validityDays) * 86400 { log("\(t.name) still fresh — skipping"); continue }
-                let udid = (!t.udid.isEmpty && connected.contains(t.udid)) ? t.udid : fallbackUDID
+                // Reinstall on the app's OWN device. If that device isn't connected, SKIP —
+                // never retarget to whatever other device happens to be plugged in. That
+                // fallback silently spread every tracked app onto every same-Apple-ID device
+                // (install → Tracked.upsert then bound it there permanently). The fallback is
+                // only for LEGACY records that never recorded a device (empty udid).
+                let udid: String
+                if !t.udid.isEmpty {
+                    guard connected.contains(t.udid) else {
+                        log("\(t.name): its device isn't connected — skipping (won't install on another device)")
+                        continue
+                    }
+                    udid = t.udid
+                } else {
+                    udid = fallbackUDID
+                }
                 if udid.isEmpty { log("no device connected for \(t.name) — skipping"); continue }
                 do {
                     log("refreshing \(t.name) [\(appleID)]…")
