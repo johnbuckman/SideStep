@@ -26,9 +26,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/magnatune-icon.png",
       "versions": [
         {
-          "version": "1.1.1",
-          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.1.1/Magnatune-v1.1.1-unsigned.ipa",
-          "size": 7324533
+          "version": "1.1.2",
+          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.1.2/Magnatune-v1.1.2-unsigned.ipa",
+          "size": 7371609
         }
       ]
     },
