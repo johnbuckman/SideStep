@@ -12,9 +12,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/stayontrack-icon.png",
       "versions": [
         {
-          "version": "1.1.9",
-          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v1.1.9/StayOnTrack.ipa",
-          "size": 3723527
+          "version": "1.1.10",
+          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v1.1.10/StayOnTrack.ipa",
+          "size": 3732327
         }
       ]
     },
@@ -26,9 +26,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/magnatune-icon.png",
       "versions": [
         {
-          "version": "1.0.7",
-          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.0.7/Magnatune-v1.0.7-unsigned.ipa",
-          "size": 7232024
+          "version": "1.1.1",
+          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.1.1/Magnatune-v1.1.1-unsigned.ipa",
+          "size": 7324533
         }
       ]
     },
@@ -54,9 +54,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decent-icon.png",
       "versions": [
         {
-          "version": "0.8.8-beta.1",
-          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.8.8-beta.1/decaid-ios-unsigned-latest.ipa",
-          "size": 45656477
+          "version": "0.8.8-beta.2",
+          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.8.8-beta.2/decaid-ios-unsigned-latest.ipa",
+          "size": 45672209
         }
       ]
     },
