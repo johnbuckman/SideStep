@@ -12,9 +12,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/stayontrack-icon.png",
       "versions": [
         {
-          "version": "1.1.13",
-          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v1.1.13/StayOnTrack.ipa",
-          "size": 3743266
+          "version": "1.1.14",
+          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v1.1.14/StayOnTrack.ipa",
+          "size": 3761262
         }
       ]
     },
