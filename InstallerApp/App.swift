@@ -341,15 +341,22 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         ALTAppleAPI.preferSMSTwoFactorCode = textMeCode
         loginStage = .working; loginStatus = "Signing in…"
         DispatchQueue.global().async {
-            guard let anisette = Anisette.fresh() else { Task { @MainActor in self.loginStatus = "Anisette failed."; self.loginStage = .idle }; return }
+            guard let anisette = Anisette.fresh() else {
+                let why = Anisette.lastFailure ?? "unknown reason"
+                dlog("login: Anisette failed — \(why)")
+                Task { @MainActor in self.loginStatus = "Anisette failed: \(why)"; self.loginStage = .idle }
+                return
+            }
             ALTAppleAPI.sharedAPI.authenticate(appleID: id, password: pw, anisetteData: anisette,
                 verificationHandler: { submit in Task { @MainActor in self.submit2FA = submit; self.loginStage = .needs2FA; self.loginStatus = "Enter the 2-factor code." } },
                 completionHandler: { account, session, error in
                     Task { @MainActor in
                         if let error {
                             let ns = error as NSError
+                            dlog("login: sign-in failed — \(ns.domain) \(ns.code)")
                             self.loginStatus = "Sign-in failed: \(error.localizedDescription) [\(ns.code)]"; self.loginStage = .idle
                         } else if let account, let session {
+                            dlog("login: signed in \(account.appleID)")
                             AccountStore.add(account: account, session: session)
                             Keychain.savePassword(pw, for: account.appleID)
                             self.accounts = AccountStore.records()

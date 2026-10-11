@@ -189,7 +189,8 @@ public final class ALTAnisetteData: NSObject, NSCopying, NSSecureCoding {
             return nil
         }
 
-        let locale = Locale(identifier: localeID)
+        let cleanLocaleID = localeID.components(separatedBy: "@").first ?? localeID
+        let locale = Locale(identifier: cleanLocaleID)
         let tz =
             TimeZone(abbreviation: tzID)
             ?? .current
@@ -222,11 +223,17 @@ public final class ALTAnisetteData: NSObject, NSCopying, NSSecureCoding {
             "deviceSerialNumber": deviceSerialNumber,
             "deviceDescription": deviceDescription,
             "date": formatter.string(from: date),
-            "locale": locale.identifier,
+            "locale": locale.sanitizedIdentifier,
             "timeZone":
                 timeZone.abbreviation() ??
                 TimeZone.current.abbreviation() ??
                 "PST"
         ]
+    }
+}
+
+extension Locale {
+    var sanitizedIdentifier: String {
+        identifier.components(separatedBy: "@").first ?? "en_US"
     }
 }

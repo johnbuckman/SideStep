@@ -242,7 +242,7 @@ if let i = args.firstIndex(of: "--source"), i + 1 < args.count {
 guard args.count >= 2 else { errln("usage: Provision --install | --source <url> [bundleID] | --refresh | <apple-id> [--sms]"); exit(64) }
 let appleID = args[1]
 ALTAppleAPI.preferSMSTwoFactorCode = args.contains("--sms")
-guard let anisette = Anisette.fresh() else { errln("Anisette generation failed"); exit(1) }
+guard let anisette = Anisette.fresh() else { errln("Anisette generation failed: \(Anisette.lastFailure ?? "unknown reason")"); exit(1) }
 let pw: String
 if let envpw = ProcessInfo.processInfo.environment["SIDESTEP_PW"], !envpw.isEmpty { pw = envpw }
 else { pw = String(cString: getpass("Apple ID password (no echo): ")) }
