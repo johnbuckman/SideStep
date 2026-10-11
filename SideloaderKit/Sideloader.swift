@@ -51,24 +51,92 @@ public enum Anisette {
         return (cls as AnyObject).perform(NSSelectorFromString("currentDevice"))?.takeUnretainedValue()
     }
     private static func otpHeaders() -> [String: String]? {
-        guard let cls = NSClassFromString("AOSUtilities") else { return nil }
+        guard let cls = NSClassFromString("AOSUtilities") else { note("AOSUtilities class not found"); return nil }
         let r = (cls as AnyObject).perform(NSSelectorFromString("retrieveOTPHeadersForDSID:"), with: "-2")
-        return r?.takeUnretainedValue() as? [String: String]
+        guard let headers = r?.takeUnretainedValue() as? [String: String] else { note("AOSUtilities returned no headers"); return nil }
+        return headers
+    }
+    /// Fallback: AuthKit's AKAppleIDSession — the path Xcode itself (and AltServer's
+    /// Mail plugin) uses. Returns the full GSA header set (X-Apple-I-MD, -MD-M, -MD-LU, …).
+    private static func authKitHeaders() -> [String: String]? {
+        guard let cls = NSClassFromString("AKAppleIDSession") as AnyObject? else { note("AKAppleIDSession class not found"); return nil }
+        let initSel = NSSelectorFromString("initWithIdentifier:"), hdrSel = NSSelectorFromString("appleIDHeadersForRequest:")
+        guard let alloced = cls.perform(NSSelectorFromString("alloc"))?.takeRetainedValue(),
+              alloced.responds(to: initSel), alloced.responds(to: hdrSel),
+              let session = alloced.perform(initSel, with: "com.apple.gs.xcode.auth")?.takeUnretainedValue()
+        else { note("AKAppleIDSession init unavailable"); return nil }
+        let request = NSURLRequest(url: URL(string: "https://gsa.apple.com/grandslam/GsService2")!)
+        guard let headers = session.perform(hdrSel, with: request)?.takeUnretainedValue() as? [String: String] else {
+            note("AKAppleIDSession returned no headers"); return nil
+        }
+        return headers
     }
     private static func sha256Upper(_ s: String) -> String {
         SHA256.hash(data: Data(s.utf8)).map { String(format: "%02X", $0) }.joined()
     }
+    /// Why the most recent `fresh()` returned nil — shown to the user so a failure
+    /// says more than "Anisette failed."
+    public private(set) static var lastFailure: String?
+    private static var notes: [String] = []
+    private static func note(_ s: String) { notes.append(s); print("[SideStep] Anisette: \(s)") }
+    /// Header names only — the values are one-time credentials and never logged.
+    private static func keys(_ h: [String: String]) -> String { h.keys.sorted().joined(separator: ",") }
+
+    /// Let AltSign fetch fresh Anisette for 2FA steps and the post-2FA sign-in retry.
+    private static let hookInstalled: Void = { ALTAppleAPI.freshAnisette = { Anisette.fresh() } }()
+
     public static func fresh() -> ALTAnisetteData? {
         _ = loaded
-        guard let otp = otpHeaders(), let md = otp["X-Apple-MD"], let mdm = otp["X-Apple-MD-M"],
-              let dev = akDevice() else { return nil }
+        _ = hookInstalled
+        notes = []
+        guard let dev = akDevice() else {
+            note("AKDevice.currentDevice unavailable")
+            lastFailure = notes.joined(separator: "; ")
+            return nil
+        }
         let desc = (dev.value(forKey: "serverFriendlyDescription") as? String) ?? "<Mac> <macOS;26.2;25C56> <com.apple.AuthKit/1>"
         let devUUID = (dev.value(forKey: "uniqueDeviceIdentifier") as? String) ?? UUID().uuidString
         let luUUID = (dev.value(forKey: "localUserUUID") as? String) ?? UUID().uuidString
         let serial = (dev.value(forKey: "serialNumber") as? String) ?? "0"
-        return ALTAnisetteData(machineID: mdm, oneTimePassword: md, localUserID: sha256Upper(luUUID),
-                               routingInfo: 17106176, deviceUniqueIdentifier: devUUID, deviceSerialNumber: serial,
-                               deviceDescription: desc, date: Date(), locale: .current, timeZone: .current)
+
+        // AOSKit names the headers X-Apple-MD / X-Apple-MD-M.
+        if let otp = otpHeaders() {
+            if let md = otp["X-Apple-MD"], let mdm = otp["X-Apple-MD-M"] {
+                ALTAppleAPI.remoteAnisetteUserAgent = nil
+                lastFailure = nil
+                return ALTAnisetteData(machineID: mdm, oneTimePassword: md, localUserID: sha256Upper(luUUID),
+                                       routingInfo: 17106176, deviceUniqueIdentifier: devUUID, deviceSerialNumber: serial,
+                                       deviceDescription: desc, date: Date(), locale: .current, timeZone: .current)
+            }
+            note("AOSUtilities headers missing X-Apple-MD/-MD-M (got: \(keys(otp)))")
+        }
+        // AuthKit names them X-Apple-I-MD / X-Apple-I-MD-M and supplies LU + RINFO itself.
+        if let h = authKitHeaders() {
+            if let md = h["X-Apple-I-MD"], let mdm = h["X-Apple-I-MD-M"] {
+                note("using AuthKit fallback")
+                ALTAppleAPI.remoteAnisetteUserAgent = nil
+                lastFailure = nil
+                return ALTAnisetteData(machineID: mdm, oneTimePassword: md,
+                                       localUserID: h["X-Apple-I-MD-LU"] ?? sha256Upper(luUUID),
+                                       routingInfo: h["X-Apple-I-MD-RINFO"].flatMap { UInt64($0) } ?? 17106176,
+                                       deviceUniqueIdentifier: h["X-Mme-Device-Id"] ?? devUUID, deviceSerialNumber: serial,
+                                       deviceDescription: h["X-MMe-Client-Info"] ?? desc, date: Date(), locale: .current, timeZone: .current)
+            }
+            note("AKAppleIDSession headers missing X-Apple-I-MD/-MD-M (got: \(keys(h)))")
+        }
+        // macOS 27 refuses local Anisette to SideStep (akd rejects the XPC connection),
+        // so fall back to a remote Anisette v3 server.
+        do {
+            let a = try RemoteAnisette.fetch()
+            note("using remote server \(URL(string: RemoteAnisette.serverURL)?.host ?? RemoteAnisette.serverURL)")
+            ALTAppleAPI.remoteAnisetteUserAgent = RemoteAnisette.lastUserAgent
+            lastFailure = nil
+            return a
+        } catch {
+            note(error.localizedDescription)
+        }
+        lastFailure = notes.joined(separator: "; ")
+        return nil
     }
 }
 

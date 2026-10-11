@@ -284,3 +284,34 @@ extension ALTAppleAPIError: CustomNSError {
         self = code
     }
 }
+
+public enum ALTServerError: LocalizedError {
+    case badServerResponse(reason: String, jsonPayload: String)
+    case invalidResponseFormat(rawPayload: String)
+    case missingKey(key: String, jsonPayload: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .badServerResponse(let reason, let jsonPayload):
+            return "Invalid server response: \(reason) (Payload: '\(jsonPayload)')"
+        case .invalidResponseFormat(let rawPayload):
+            let trimmed = rawPayload.trimmingCharacters(in: .whitespacesAndNewlines)
+            let formattedPayload: String
+            if trimmed.isEmpty {
+                formattedPayload = "'' (Content-Length: 0)"
+            } else if trimmed.lowercased().contains("<html") || trimmed.hasPrefix("<!DOCTYPE") || (trimmed.hasPrefix("<") && trimmed.contains(">")) {
+                let stripped = trimmed
+                    .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                    .components(separatedBy: .whitespacesAndNewlines)
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
+                formattedPayload = stripped.isEmpty ? "(HTML response)" : "'\(stripped)'"
+            } else {
+                formattedPayload = "'\(rawPayload)'"
+            }
+            return "Invalid server response: unparseable format (Payload: \(formattedPayload))"
+        case .missingKey(let key, let jsonPayload):
+            return "Invalid server response: missing required key '\(key)' (Payload: '\(jsonPayload)')"
+        }
+    }
+}
