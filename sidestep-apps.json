@@ -8,13 +8,13 @@
       "name": "Stay on Track",
       "bundleIdentifier": "com.johnbuckman.stayontrack",
       "developerName": "John Buckman",
-      "localizedDescription": "A fully-offline hiking companion that keeps you on your intended trail — a British voice calls out \"Left / Right / Straight\" as you approach every junction where another path joins, and speaks how far you have strayed if you wander off-trail. It also shows nearby restaurants and public toilets along the route (with the time you will reach each), plus offline OpenStreetMap maps that work in airplane mode. Requires iOS 17.",
+      "localizedDescription": "A fully-offline hiking companion that keeps you on your intended trail — a British voice calls out \"Left / Right / Straight\" as you approach every junction where another path joins, and speaks how far you have strayed if you wander off-trail. Pause for a break — it can also auto-pause when you stop moving — and your estimated time to the finish keeps using your real walking pace instead of counting your rest stops. An elevation profile shows the climbs and descents ahead, along with nearby restaurants and public toilets on the route (and the time you will reach each), plus offline OpenStreetMap maps that work in airplane mode. Requires iOS 17.",
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/stayontrack-icon.png",
       "versions": [
         {
-          "version": "1.1.9",
-          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v1.1.9/StayOnTrack.ipa",
-          "size": 3723527
+          "version": "1.1.14",
+          "downloadURL": "https://github.com/johnbuckman/stayontrack/releases/download/v1.1.14/StayOnTrack.ipa",
+          "size": 3761262
         }
       ]
     },
@@ -26,9 +26,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/magnatune-icon.png",
       "versions": [
         {
-          "version": "1.0.7",
-          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.0.7/Magnatune-v1.0.7-unsigned.ipa",
-          "size": 7232024
+          "version": "1.1.2",
+          "downloadURL": "https://github.com/johnbuckman/magnatune-app/releases/download/v1.1.2/Magnatune-v1.1.2-unsigned.ipa",
+          "size": 7371609
         }
       ]
     },
@@ -54,9 +54,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decent-icon.png",
       "versions": [
         {
-          "version": "0.8.8-beta.1",
-          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.8.8-beta.1/decaid-ios-unsigned-latest.ipa",
-          "size": 45656477
+          "version": "0.9.0-beta.1",
+          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.9.0-beta.1/decaid-ios-unsigned-0.9.0-beta.1.ipa",
+          "size": 45768997
         }
       ]
     },
