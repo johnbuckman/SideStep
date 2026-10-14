@@ -141,8 +141,15 @@ public extension ALTAppleAPI
                             verboseLog("[AltSign] Parse complete. dsid: \(dsid), token: \(idmsToken)")
                             context.dsid = dsid
 
-                            let authType = statusDictionary["au"] as? String
-                            verboseLog("[AltSign] Authentication status type: \(authType ?? "nil")")
+                            var authType = statusDictionary["au"] as? String
+                            // Since 2026-10-12 a sign-in with (Android) server anisette answers
+                            // hsc 409 = "two-factor required" WITHOUT an "au" mode: Apple has
+                            // already pushed the code to the account's trusted devices, so only
+                            // the validate step is needed (SMS is refused for Android anisette).
+                            // Same handling as xtool/xcross.
+                            let codeAlreadyPushed = authType == nil && (statusDictionary["hsc"] as? Int) == 409
+                            if codeAlreadyPushed { authType = "trustedDeviceSecondaryAuth" }
+                            verboseLog("[AltSign] Authentication status type: \(authType ?? "nil")\(codeAlreadyPushed ? " (hsc 409, code already pushed)" : "")")
 
                             switch authType {
                             case "trustedDeviceSecondaryAuth":
@@ -158,7 +165,7 @@ public extension ALTAppleAPI
                                         }
                                     }
                                 } else {
-                                    self.requestTrustedDeviceTwoFactorCode(dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData, verificationHandler: verificationHandler) { result in
+                                    self.requestTrustedDeviceTwoFactorCode(dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData, codeAlreadySent: codeAlreadyPushed, verificationHandler: verificationHandler) { result in
                                         switch result {
                                         case let .failure(error): completionHandler(nil, nil, error)
                                         case .success:
@@ -255,15 +262,16 @@ private extension ALTAppleAPI {
     func requestTrustedDeviceTwoFactorCode(dsid: String,
                                            idmsToken: String,
                                            anisetteData: ALTAnisetteData,
+                                           codeAlreadySent: Bool = false,
                                            verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
                                            completionHandler: @escaping (Result<Void, Error>) -> Void) {
-        verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode starting for dsid: \(dsid)")
+        verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode starting for dsid: \(dsid)\(codeAlreadySent ? " (code already pushed — validate only)" : "")")
         let requestURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!
         let verifyURL = URL(string: "https://gsa.apple.com/grandslam/GsService2/validate")!
 
         let request = makeTwoFactorCodeRequest(url: requestURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
 
-        let requestCodeTask = session.dataTask(with: request) { data, _, error in
+        let afterRequest: (Data?, URLResponse?, Error?) -> Void = { data, _, error in
             if let error {
                 verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode request code task failed: \(error)")
             } else {
@@ -326,7 +334,8 @@ private extension ALTAppleAPI {
             }
         }
 
-        requestCodeTask.resume()
+        if codeAlreadySent { afterRequest(nil, nil, nil) }
+        else { session.dataTask(with: request, completionHandler: afterRequest).resume() }
     }
 
     func requestSMSTwoFactorCode(dsid: String,
@@ -364,6 +373,14 @@ private extension ALTAppleAPI {
             }
             do {
                 guard error == nil else { throw error! }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                verboseLog("[AltSign] requestSMSTwoFactorCode HTTP \(status)")
+                // Since 2026-10-12 Apple refuses SMS two-factor (HTTP 403) for sign-ins made
+                // with Android anisette (= any anisette server); only a trusted-device push works.
+                if status == 403 {
+                    throw NSError(domain: ALTUnderlyingAppleAPIErrorDomain, code: 403, userInfo: [NSLocalizedDescriptionKey:
+                        "Apple refused to text a verification code (HTTP 403). Apple doesn’t allow texted codes when the sign-in data comes from an anisette server — sign this Apple ID in on an iPhone, iPad or Mac so the code can be sent there instead."])
+                }
 
                 func responseHandler(verificationCode: String?) {
                     verboseLog("[AltSign] requestSMSTwoFactorCode received code from user. Has code: \(verificationCode != nil)")

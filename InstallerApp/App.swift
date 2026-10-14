@@ -189,6 +189,7 @@ func installDiagnosticsLog() {
             while let nl = diagLineBuf.firstIndex(of: 0x0A) {
                 let line = diagLineBuf.subdata(in: diagLineBuf.startIndex..<nl)
                 diagLineBuf.removeSubrange(diagLineBuf.startIndex...nl)
+                if let s = String(data: line, encoding: .utf8) { Anisette.noteLogLine(s) }   // AOSKit error codes
                 out.append(Data("[\(diagStampFmt.string(from: Date()))] ".utf8))
                 out.append(line); out.append(0x0A)
             }
@@ -258,6 +259,17 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     // install
     @Published var installing = false
     @Published var status = ""
+    // Set while SideStep can't get Apple's sign-in data (anisette) — e.g. macOS 27 blocking
+    // local generation AND the anisette server failing. Background refreshes fail silently
+    // otherwise, so the panel shows this until it works again.
+    @Published var anisetteProblem = Anisette.lastFailure ?? ""
+    @Published var anisetteServerHost = Anisette.host(Anisette.serverURL)
+    private var anisetteObserver: NSObjectProtocol?
+    init() {
+        anisetteObserver = NotificationCenter.default.addObserver(forName: Anisette.problemChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.anisetteProblem = Anisette.lastFailure ?? "" }
+        }
+    }
     // Install progress/result window — so that once an install starts, the user sees a
     // live progress window that ends with the outcome + an OK button, and never has to
     // reopen SideStep to find out what happened.
@@ -341,7 +353,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         ALTAppleAPI.preferSMSTwoFactorCode = textMeCode
         loginStage = .working; loginStatus = "Signing in…"
         DispatchQueue.global().async {
-            guard let anisette = Anisette.fresh() else { Task { @MainActor in self.loginStatus = "Anisette failed."; self.loginStage = .idle }; return }
+            guard let anisette = Anisette.fresh() else { Task { @MainActor in self.loginStatus = Anisette.lastFailure ?? "Couldn’t get Apple’s sign-in data (anisette)."; self.loginStage = .idle }; return }
             ALTAppleAPI.sharedAPI.authenticate(appleID: id, password: pw, anisetteData: anisette,
                 verificationHandler: { submit in Task { @MainActor in self.submit2FA = submit; self.loginStage = .needs2FA; self.loginStatus = "Enter the 2-factor code." } },
                 completionHandler: { account, session, error in
@@ -813,7 +825,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         dlog("execute: udid=\(udid) appleID=\(chosenAppleID ?? "nil") kind=\(pendingKind.map { "\($0)" } ?? "nil")")
         guard let kind = pendingKind, let aid = chosenAppleID,
               let (account, session) = AccountStore.session(for: aid) else {
-            status = "Couldn't load that account."
+            status = "Couldn't load that account: \(chosenAppleID.map { AccountStore.sessionFailureReason(for: $0) } ?? "no account chosen")"
             dlog("execute: ABORT — pendingKind/chosenAppleID/session missing (session for \(chosenAppleID ?? "nil") = \(chosenAppleID.flatMap { AccountStore.session(for: $0) } == nil ? "nil" : "ok"))")
             return
         }
@@ -1343,6 +1355,37 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         launchAtLogin = (SMAppService.mainApp.status == .enabled)
     }
 
+    /// Settings ▸ "Anisette server": where SideStep gets Apple's sign-in headers when this Mac
+    /// can't generate them itself (macOS 27+). Any anisette-v3 server works.
+    func promptAnisetteServer() {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "Anisette server"
+        a.informativeText = "Apple requires special “anisette” headers to sign in. SideStep makes them on this Mac when macOS allows it (macOS 26 and earlier); otherwise it asks an anisette-v3 server. The server never sees your Apple ID or password.\n\nDefault: \(Anisette.defaultServer) (run by SideStore)."
+        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        tf.stringValue = Anisette.serverURL
+        tf.placeholderString = Anisette.defaultServer
+        a.accessoryView = tf
+        a.addButton(withTitle: "Save")           // .alertFirstButtonReturn
+        a.addButton(withTitle: "Use default")    // .alertSecondButtonReturn
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = tf
+        switch a.runModal() {
+        case .alertFirstButtonReturn:
+            let v = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let u = URL(string: v), u.scheme == "https" || u.scheme == "http", u.host != nil else {
+                status = "Failed: “\(v)” isn’t an http(s) URL."; return
+            }
+            Anisette.serverURL = v
+        case .alertSecondButtonReturn:
+            Anisette.serverURL = ""
+        default:
+            return
+        }
+        anisetteServerHost = Anisette.host(Anisette.serverURL)
+        status = "Anisette server set to \(anisetteServerHost)."
+    }
+
     func refreshAllNow() {
         installing = true; status = "Refreshing all apps…"
         Task.detached { [weak self] in
@@ -1642,6 +1685,7 @@ struct ContentView: View {
                     Button("Check apps for updates now") { m.checkGitHubUpdatesNow() }.disabled(m.installing)
                     Button("Check for SideStep Update now") { Task { await UpdateChecker.shared.check(userInitiated: true) } }
                     Button(m.githubHasToken ? "GitHub token (saved) — change…" : "Add a GitHub token (faster search)…") { m.promptGitHubToken() }
+                    Button("Anisette server: \(m.anisetteServerHost) — change…") { m.promptAnisetteServer() }
                     Button("Show Debug Log…") { DebugWindow.show() }
                     Text("SideStep keeps apps signed while it runs in the menu bar — it re-signs automatically when you plug in a device and every couple of hours. No separate background program is needed.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -1651,6 +1695,10 @@ struct ContentView: View {
                 Text("Settings").contentShape(Rectangle()).onTapGesture { settingsExpanded.toggle() }
             }.font(.callout)
 
+            if !m.anisetteProblem.isEmpty {
+                Text("⚠️ \(m.anisetteProblem)").font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
             HStack {
                 if m.installing { ProgressView().scaleEffect(0.6).frame(width: 16, height: 16) }
                 Text(m.status).font(.callout).foregroundStyle(m.status.hasPrefix("✅") ? .green : (m.status.hasPrefix("Failed") ? .red : .primary))

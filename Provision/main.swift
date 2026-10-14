@@ -238,6 +238,28 @@ if let i = args.firstIndex(of: "--source"), i + 1 < args.count {
     exit(0)
 }
 
+// Anisette check: generate Apple's sign-in headers and say where they came from.
+// SIDESTEP_REMOTE_ANISETTE=1 forces the anisette-server path. --try-login then attempts a
+// sign-in for a nonexistent example.com Apple ID: Apple's reply shows whether it accepted
+// the headers (an "account/password" error) or rejected them.
+if args.contains("--anisette") {
+    guard let a = Anisette.fresh() else { errln(">>> FAILED: \(Anisette.lastFailure ?? "?")"); exit(1) }
+    print(">>> anisette OK — server \(Anisette.serverURL), forced remote=\(ProcessInfo.processInfo.environment["SIDESTEP_REMOTE_ANISETTE"] == "1")")
+    print("    machineID \(a.machineID.count) chars, OTP \(a.oneTimePassword.count) chars, routingInfo \(a.routingInfo)")
+    print("    device \(a.deviceDescription)")
+    if args.contains("--try-login") {
+        ALTAppleAPI.sharedAPI.authenticate(appleID: "sidestep-anisette-check@example.com", password: "not-a-real-password-123", anisetteData: a,
+            verificationHandler: { submit in submit(nil) },
+            completionHandler: { _, _, e in
+                let ns = e.map { $0 as NSError }
+                print(">>> login reply: [\(ns?.domain ?? "-") \(ns?.code ?? 0)] \(e?.localizedDescription ?? "no error")")
+                sem.signal()
+            })
+        sem.wait()
+    }
+    exit(0)
+}
+
 // ---- auth mode ----
 guard args.count >= 2 else { errln("usage: Provision --install | --source <url> [bundleID] | --refresh | <apple-id> [--sms]"); exit(64) }
 let appleID = args[1]

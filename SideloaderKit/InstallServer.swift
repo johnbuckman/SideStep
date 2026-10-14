@@ -215,7 +215,7 @@ public final class InstallServer: NSObject {
 
         var lastErr = "couldn't install"
         for aid in candidates {
-            guard let (acc, ses) = await Sideloader.ensureSession(aid, log: stream) else { lastErr = "sign-in failed for \(aid)"; continue }
+            guard let (acc, ses) = await Sideloader.ensureSession(aid, log: stream) else { lastErr = "sign-in failed for \(aid)\(Anisette.lastFailure.map { ": \($0)" } ?? "")"; continue }
             send(c, "STATUS Signing with \(aid)…")
             do {
                 _ = try await action(acc, ses)

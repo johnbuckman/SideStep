@@ -38,39 +38,7 @@ public func cont<T>(_ body: (@escaping (T?, Error?) -> Void) -> Void) async thro
 
 let SideStepSupportDir = NSString(string: "~/Library/Application Support/SideStep").expandingTildeInPath
 
-// MARK: - Local Anisette (AOSKit / AuthKit)
-
-public enum Anisette {
-    private static let loaded: Bool = {
-        dlopen("/System/Library/PrivateFrameworks/AOSKit.framework/AOSKit", RTLD_NOW)
-        dlopen("/System/Library/PrivateFrameworks/AuthKit.framework/AuthKit", RTLD_NOW)
-        return true
-    }()
-    private static func akDevice() -> AnyObject? {
-        guard let cls = NSClassFromString("AKDevice") else { return nil }
-        return (cls as AnyObject).perform(NSSelectorFromString("currentDevice"))?.takeUnretainedValue()
-    }
-    private static func otpHeaders() -> [String: String]? {
-        guard let cls = NSClassFromString("AOSUtilities") else { return nil }
-        let r = (cls as AnyObject).perform(NSSelectorFromString("retrieveOTPHeadersForDSID:"), with: "-2")
-        return r?.takeUnretainedValue() as? [String: String]
-    }
-    private static func sha256Upper(_ s: String) -> String {
-        SHA256.hash(data: Data(s.utf8)).map { String(format: "%02X", $0) }.joined()
-    }
-    public static func fresh() -> ALTAnisetteData? {
-        _ = loaded
-        guard let otp = otpHeaders(), let md = otp["X-Apple-MD"], let mdm = otp["X-Apple-MD-M"],
-              let dev = akDevice() else { return nil }
-        let desc = (dev.value(forKey: "serverFriendlyDescription") as? String) ?? "<Mac> <macOS;26.2;25C56> <com.apple.AuthKit/1>"
-        let devUUID = (dev.value(forKey: "uniqueDeviceIdentifier") as? String) ?? UUID().uuidString
-        let luUUID = (dev.value(forKey: "localUserUUID") as? String) ?? UUID().uuidString
-        let serial = (dev.value(forKey: "serialNumber") as? String) ?? "0"
-        return ALTAnisetteData(machineID: mdm, oneTimePassword: md, localUserID: sha256Upper(luUUID),
-                               routingInfo: 17106176, deviceUniqueIdentifier: devUUID, deviceSerialNumber: serial,
-                               deviceDescription: desc, date: Date(), locale: .current, timeZone: .current)
-    }
-}
+// Anisette (Apple sign-in headers): see Anisette.swift.
 
 // MARK: - Account persistence (multiple Apple IDs; each free ID = 3 app slots)
 
@@ -183,6 +151,11 @@ public enum AccountStore {
         account.appleID = r.appleID; account.identifier = r.identifier
         account.firstName = r.firstName; account.lastName = r.lastName
         return (account, ALTAppleAPISession(dsid: r.dsid, authToken: r.authToken, anisetteData: anisette))
+    }
+    /// Why `session(for:)` just returned nil — for logs and the UI.
+    public static func sessionFailureReason(for appleID: String) -> String {
+        if !records().contains(where: { $0.appleID == appleID }) { return "no saved account for \(appleID)" }
+        return Anisette.lastFailure ?? "couldn’t get Apple’s sign-in data (anisette)"
     }
     public static var appleIDs: [String] { records().map(\.appleID) }
 }
@@ -1464,11 +1437,12 @@ public struct Sideloader {
     /// doesn't have to retype anything). Returns nil only if there's no saved
     /// account, or if the re-login needs a 2-factor code we can't supply unattended.
     static func ensureSession(_ appleID: String, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
-        guard let pair = AccountStore.session(for: appleID) else { return nil }
+        guard let pair = AccountStore.session(for: appleID) else { log(AccountStore.sessionFailureReason(for: appleID)); return nil }
         let teams: [ALTTeam]? = try? await cont { ALTAppleAPI.sharedAPI.fetchTeams(for: pair.0, session: pair.1, completionHandler: $0) }
         if teams != nil { return pair }   // saved session still good
         log("session for \(appleID) expired — signing in again…")
-        guard let pw = Keychain.password(for: appleID), let anisette = Anisette.fresh() else { return nil }
+        guard let pw = Keychain.password(for: appleID) else { log("no saved password for \(appleID)"); return nil }
+        guard let anisette = Anisette.fresh() else { log(AccountStore.sessionFailureReason(for: appleID)); return nil }
         let res: (ALTAccount, ALTAppleAPISession)? = try? await withCheckedThrowingContinuation { c in
             ALTAppleAPI.sharedAPI.authenticate(appleID: appleID, password: pw, anisetteData: anisette,
                 verificationHandler: { submit in submit(nil) },   // unattended: can't satisfy a 2FA prompt
@@ -1560,6 +1534,7 @@ public struct Sideloader {
                                   onProgress: @escaping @Sendable (_ received: Int64, _ total: Int64) -> Void = { _, _ in },
                                   onInstall: @escaping @Sendable (_ percent: Int, _ phase: String) -> Void = { _, _ in }) async throws -> String {
         guard let (account, session) = await ensureSession(t.appleID, log: log) else {
+            if let why = Anisette.lastFailure { throw SideErr.fail(why) }
             throw SideErr.fail("Couldn't sign in to \(t.appleID) automatically. Open SideStep and sign in again — you may just need to enter a texted code.")
         }
         // Pick the build to install + a stable key identifying it (so guardedInstall can skip a
@@ -1742,7 +1717,7 @@ public struct Sideloader {
         }
 
         for (appleID, apps) in byAccount {
-            guard var pair = AccountStore.session(for: appleID) else { log("no saved account for \(appleID) — skipping"); continue }
+            guard var pair = AccountStore.session(for: appleID) else { log("\(appleID): \(AccountStore.sessionFailureReason(for: appleID)) — skipping"); continue }
             // validate session; re-auth via keychain if needed
             do { _ = try await cont { ALTAppleAPI.sharedAPI.fetchTeams(for: pair.0, session: pair.1, completionHandler: $0) } }
             catch {
@@ -1754,6 +1729,8 @@ public struct Sideloader {
                             completionHandler: { a, s, e in if let a, let s { c.resume(returning: (a, s)) } else { c.resume(throwing: e ?? SideErr.fail("reauth")) } })
                     }
                     if let r = res { pair = r; AccountStore.add(account: r.0, session: r.1) }
+                } else if let why = Anisette.lastFailure {
+                    log("\(appleID): can’t re-authenticate — \(why)")
                 }
             }
             for t in apps {
