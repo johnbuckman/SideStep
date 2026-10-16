@@ -1697,13 +1697,22 @@ public struct Sideloader {
         let tracked = Tracked.all()
         guard !tracked.isEmpty else { log("nothing to refresh"); return }
 
-        // single-flight lock (timer + connect-trigger can both fire) — ignore stale >15min
+        // single-flight lock (timer + connect-trigger can both fire). The lock holds its owner's PID:
+        // a lock left by a process that's gone (SideStep quit mid-refresh) is stale at once, instead
+        // of blocking refreshes for 15 minutes. Any lock older than 15 min is stale too.
         let fm = FileManager.default
         let lock = SideStepSupportDir + "/refresh.lock"
         if let attrs = try? fm.attributesOfItem(atPath: lock), let mt = attrs[.modificationDate] as? Date,
-           Date().timeIntervalSince(mt) < 900 { log("another refresh is running — skipping"); return }
+           Date().timeIntervalSince(mt) < 900 {
+            let owner = (try? String(contentsOfFile: lock, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            if let owner, owner > 0, kill(owner, 0) != 0, errno == ESRCH {
+                log("stale refresh lock from pid \(owner) (no longer running) — taking it over")
+            } else {
+                log("another refresh is running — skipping"); return
+            }
+        }
         try? fm.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
-        fm.createFile(atPath: lock, contents: nil)
+        fm.createFile(atPath: lock, contents: Data("\(getpid())".utf8))
         defer { try? fm.removeItem(atPath: lock) }
 
         let now = Date().timeIntervalSince1970

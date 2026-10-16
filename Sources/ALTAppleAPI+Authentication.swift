@@ -62,9 +62,8 @@ public extension ALTAppleAPI
                         let raw = st["X-Apple-I-MD-DATA"] ?? responseDictionary["X-Apple-I-MD-DATA"]
                         let sim = (raw as? String) ?? (raw as? Data)?.base64EncodedString()
                         print("[SideStep auth] hsc 434 — anisette out of sync, sim present: \(sim?.isEmpty == false)")
-                        guard !ALTAppleAPI.isResynchronizing, let resync = ALTAppleAPI.anisetteResyncHandler,
-                              let sim, !sim.isEmpty else { throw ALTAppleAPIError.invalidAnisetteData }
-                        ALTAppleAPI.isResynchronizing = true
+                        guard let resync = ALTAppleAPI.anisetteResyncHandler, let sim, !sim.isEmpty,
+                              ALTAppleAPI.beginResynchronizing() else { throw ALTAppleAPIError.invalidAnisetteData }
                         resync(sim) { data, error in
                             guard let data else {
                                 ALTAppleAPI.isResynchronizing = false
@@ -79,15 +78,10 @@ public extension ALTAppleAPI
                                     ALTAppleAPI.isResynchronizing = false
                                     return completionHandler(account, session, error)
                                 }
-                                print("[SideStep auth] HTTP 503 after resync — retrying once with fresh anisette in 3 s")
-                                DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-                                    ALTAppleAPI.withFreshAnisette(fallback: data) { fresh in
-                                        self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: fresh,
-                                                          verificationHandler: verificationHandler) { account, session, error in
-                                            ALTAppleAPI.isResynchronizing = false
-                                            completionHandler(account, session, error)
-                                        }
-                                    }
+                                self.reauthenticateAfterStep("resync", appleID: unsanitizedAppleID, password: password,
+                                                             fallback: data, verificationHandler: verificationHandler, attempt: 1) { account, session, error in
+                                    ALTAppleAPI.isResynchronizing = false
+                                    completionHandler(account, session, error)
                                 }
                             }
                         }
@@ -194,7 +188,7 @@ public extension ALTAppleAPI
                                         switch result {
                                         case let .failure(error): completionHandler(nil, nil, error)
                                         case .success:
-                                            ALTAppleAPI.withFreshAnisette(fallback: anisetteData) { fresh in self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: fresh, verificationHandler: verificationHandler, completionHandler: completionHandler) }
+                                            self.reauthenticateAfterStep("2FA", appleID: unsanitizedAppleID, password: password, fallback: anisetteData, verificationHandler: verificationHandler, completionHandler: completionHandler)
                                         }
                                     }
                                 } else {
@@ -202,7 +196,7 @@ public extension ALTAppleAPI
                                         switch result {
                                         case let .failure(error): completionHandler(nil, nil, error)
                                         case .success:
-                                            ALTAppleAPI.withFreshAnisette(fallback: anisetteData) { fresh in self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: fresh, verificationHandler: verificationHandler, completionHandler: completionHandler) }
+                                            self.reauthenticateAfterStep("2FA", appleID: unsanitizedAppleID, password: password, fallback: anisetteData, verificationHandler: verificationHandler, completionHandler: completionHandler)
                                         }
                                     }
                                 }
@@ -214,7 +208,7 @@ public extension ALTAppleAPI
                                     switch result {
                                     case let .failure(error): completionHandler(nil, nil, error)
                                     case .success:
-                                        ALTAppleAPI.withFreshAnisette(fallback: anisetteData) { fresh in self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: fresh, verificationHandler: verificationHandler, completionHandler: completionHandler) }
+                                        self.reauthenticateAfterStep("2FA", appleID: unsanitizedAppleID, password: password, fallback: anisetteData, verificationHandler: verificationHandler, completionHandler: completionHandler)
                                     }
                                 }
 
@@ -538,7 +532,7 @@ private extension ALTAppleAPI {
                 "Content-Type": "text/x-xml-plist",
                 "X-MMe-Client-Info": anisetteData.deviceDescription,
                 "Accept": "text/x-xml-plist",
-                "X-Xcode-Version": "27.0 (27A5218g)",
+                "X-Xcode-Version": ALTAppleAPI.gsaXcodeVersion,
                 "X-Apple-App-Info": "com.apple.gs.xcode.auth",
                 "Connection": "close",
                 "User-Agent": ALTAppleAPI.gsaUserAgent
@@ -626,7 +620,7 @@ private extension ALTAppleAPI {
             "Connection": "close",
             "User-Agent": ALTAppleAPI.gsaUserAgent,
             "X-Apple-App-Info": "com.apple.gs.xcode.auth",
-            "X-Xcode-Version": "27.0 (27A5218g)",
+            "X-Xcode-Version": ALTAppleAPI.gsaXcodeVersion,
             "X-Apple-Identity-Token": encodedIdentityToken,
             "X-Apple-I-MD-M": anisetteData.machineID,
             "X-Apple-I-MD": anisetteData.oneTimePassword,
@@ -684,18 +678,67 @@ private extension Data {
 extension ALTAppleAPI {
     /// User-Agent for GrandSlam (gsa.apple.com) requests. Must match the client that generated the
     /// anisette (anisette-v3 servers report it in /v3/client_info); set by SideloaderKit's Anisette.
-    public static var authenticationUserAgent: String?
+    public static var authenticationUserAgent: String? {
+        get { gsaStateLock.withLock { _authenticationUserAgent } }
+        set { gsaStateLock.withLock { _authenticationUserAgent = newValue } }
+    }
     static var gsaUserAgent: String { authenticationUserAgent ?? "akd/1.0 CFNetwork/808.1.4" }
+    /// X-Xcode-Version for GrandSlam requests: a released Xcode build (26.6), not a beta string.
+    static let gsaXcodeVersion = "26.6 (17F113)"
+
+    // This shared sign-in state is set by SideloaderKit and read from URLSession callback
+    // threads; one lock guards all of it so concurrent sign-ins can't race on it.
+    private static let gsaStateLock = NSLock()
+    private static var _authenticationUserAgent: String?
+    private static var _anisetteResyncHandler: ((String, @escaping (ALTAnisetteData?, Error?) -> Void) -> Void)?
+    private static var _anisetteRefreshHandler: ((@escaping (ALTAnisetteData?, Error?) -> Void) -> Void)?
+    private static var _isResynchronizing = false
 
     /// Called once when GrandSlam answers hsc 434 (anisette out of sync) with X-Apple-I-MD-DATA;
     /// must return resynchronized anisette. Set by SideloaderKit's Anisette (server path).
-    public static var anisetteResyncHandler: ((String, @escaping (ALTAnisetteData?, Error?) -> Void) -> Void)?
-    static var isResynchronizing = false
+    public static var anisetteResyncHandler: ((String, @escaping (ALTAnisetteData?, Error?) -> Void) -> Void)? {
+        get { gsaStateLock.withLock { _anisetteResyncHandler } }
+        set { gsaStateLock.withLock { _anisetteResyncHandler = newValue } }
+    }
+    /// Atomically claims the single resync slot; false if a resync is already in progress.
+    static func beginResynchronizing() -> Bool {
+        gsaStateLock.withLock { if _isResynchronizing { return false }; _isResynchronizing = true; return true }
+    }
+    static var isResynchronizing: Bool {
+        get { gsaStateLock.withLock { _isResynchronizing } }
+        set { gsaStateLock.withLock { _isResynchronizing = newValue } }
+    }
 
     /// Returns fresh anisette from the current provider (each GrandSlam step after the first
     /// sign-in should use fresh anisette, as AltSign's anisetteDataRefreshHandler does).
-    public static var anisetteRefreshHandler: ((@escaping (ALTAnisetteData?, Error?) -> Void) -> Void)?
+    public static var anisetteRefreshHandler: ((@escaping (ALTAnisetteData?, Error?) -> Void) -> Void)? {
+        get { gsaStateLock.withLock { _anisetteRefreshHandler } }
+        set { gsaStateLock.withLock { _anisetteRefreshHandler = newValue } }
+    }
     static let gsaHTTPErrorDomain = "SideStep.GrandSlamHTTP"
+
+    /// The sign-in that follows a resync or a 2FA validation. Apple's GSA edge sometimes answers
+    /// it with HTTP 503 (mc-k, macOS 27 / ani.jkcoxson.com: "a second attempt works"), so on 503
+    /// retry with fresh anisette, up to twice, after 3 s and then 6 s. Other errors pass through.
+    func reauthenticateAfterStep(_ step: String, appleID: String, password: String, fallback: ALTAnisetteData,
+                                 verificationHandler: ((@escaping (String?) -> Void) -> Void)?, attempt: Int = 1,
+                                 completionHandler: @escaping (ALTAccount?, ALTAppleAPISession?, Error?) -> Void) {
+        ALTAppleAPI.withFreshAnisette(fallback: fallback) { fresh in
+            self.authenticate(appleID: appleID, password: password, anisetteData: fresh,
+                              verificationHandler: verificationHandler) { account, session, error in
+                guard let e = error as NSError?, e.domain == ALTAppleAPI.gsaHTTPErrorDomain, e.code == 503, attempt <= 2 else {
+                    return completionHandler(account, session, error)
+                }
+                let delay = 3.0 * Double(attempt)
+                print("[SideStep auth] HTTP 503 after \(step) — retrying with fresh anisette in \(Int(delay)) s (\(attempt)/2)")
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    self.reauthenticateAfterStep(step, appleID: appleID, password: password, fallback: fresh,
+                                                 verificationHandler: verificationHandler, attempt: attempt + 1,
+                                                 completionHandler: completionHandler)
+                }
+            }
+        }
+    }
 
     static func withFreshAnisette(fallback: ALTAnisetteData, _ body: @escaping (ALTAnisetteData) -> Void) {
         guard let refresh = anisetteRefreshHandler else { return body(fallback) }

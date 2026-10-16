@@ -71,6 +71,12 @@ public enum Anisette {
             switch local() {
             case .success(let a):
                 lastFailure = nil
+                // This Mac's own anisette: drop any server-specific settings a server fetch left in
+                // AltSign (server User-Agent, resync/refresh via the server) so they can't leak into
+                // a sign-in that uses local data.
+                ALTAppleAPI.authenticationUserAgent = nil
+                ALTAppleAPI.anisetteResyncHandler = nil
+                ALTAppleAPI.anisetteRefreshHandler = nil
                 return a
             case .failure(let why):
                 localWhy = why
