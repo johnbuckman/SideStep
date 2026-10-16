@@ -23,21 +23,16 @@ public extension ALTAppleAPI
 
         do {
             let clientDictionary = [
-                "bootstrap": true,
-                "icscrec": true,
-                "pbe": false,
-                "prkgen": true,
+                // Reduced to the fields (as strings) that clients which currently sign in send (AltSign PR #61).
+                "bootstrap": "true",
+                "icscrec": "true",
+                "pbe": "false",
+                "prkgen": "true",
                 "svct": "iCloud",
-                "loc": Locale.current.identifier,
-                "X-Apple-Locale": Locale.current.identifier,
+                "loc": "en_US",
                 "X-Apple-I-MD": anisetteData.oneTimePassword,
                 "X-Apple-I-MD-M": anisetteData.machineID,
-                "X-Mme-Device-Id": anisetteData.deviceUniqueIdentifier,
-                "X-Apple-I-MD-LU": anisetteData.localUserID,
-                "X-Apple-I-MD-RINFO": anisetteData.routingInfo,
-                "X-Apple-I-SRL-NO": anisetteData.deviceSerialNumber,
-                "X-Apple-I-Client-Time": dateFormatter.string(from: anisetteData.date),
-                "X-Apple-I-TimeZone": TimeZone.current.abbreviation() ?? "PST"
+                "X-Mme-Device-Id": anisetteData.deviceUniqueIdentifier
             ] as [String: Any]
 
             let context = GSAContext(username: sanitizedAppleID, password: password)
@@ -60,6 +55,44 @@ public extension ALTAppleAPI
             sendAuthenticationRequest(parameters: parameters, anisetteData: anisetteData) { result in
                 do {
                     let responseDictionary = try result.get()
+
+                    // GrandSlam hsc 434: anisette out of sync. Resynchronize once with Apple's
+                    // X-Apple-I-MD-DATA and start over (AltSign PR #61 / AltStore 22f766d).
+                    if let st = responseDictionary["Status"] as? [String: Any], st["hsc"] as? Int == 434 {
+                        let raw = st["X-Apple-I-MD-DATA"] ?? responseDictionary["X-Apple-I-MD-DATA"]
+                        let sim = (raw as? String) ?? (raw as? Data)?.base64EncodedString()
+                        print("[SideStep auth] hsc 434 — anisette out of sync, sim present: \(sim?.isEmpty == false)")
+                        guard !ALTAppleAPI.isResynchronizing, let resync = ALTAppleAPI.anisetteResyncHandler,
+                              let sim, !sim.isEmpty else { throw ALTAppleAPIError.invalidAnisetteData }
+                        ALTAppleAPI.isResynchronizing = true
+                        resync(sim) { data, error in
+                            guard let data else {
+                                ALTAppleAPI.isResynchronizing = false
+                                return completionHandler(nil, nil, error ?? ALTAppleAPIError.invalidAnisetteData)
+                            }
+                            self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: data,
+                                              verificationHandler: verificationHandler) { account, session, error in
+                                // Observed on macOS 27 / ani.jkcoxson.com: after a resync, init succeeds but
+                                // "complete" gets HTTP 503; a fresh (non-resync) attempt a few seconds later
+                                // succeeds. So retry once that way.
+                                guard let e = error as NSError?, e.domain == ALTAppleAPI.gsaHTTPErrorDomain, e.code == 503 else {
+                                    ALTAppleAPI.isResynchronizing = false
+                                    return completionHandler(account, session, error)
+                                }
+                                print("[SideStep auth] HTTP 503 after resync — retrying once with fresh anisette in 3 s")
+                                DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+                                    ALTAppleAPI.withFreshAnisette(fallback: data) { fresh in
+                                        self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: fresh,
+                                                          verificationHandler: verificationHandler) { account, session, error in
+                                            ALTAppleAPI.isResynchronizing = false
+                                            completionHandler(account, session, error)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return
+                    }
 
                     guard let c = responseDictionary["c"] as? String,
                           let salt = responseDictionary["s"] as? Data,
@@ -161,7 +194,7 @@ public extension ALTAppleAPI
                                         switch result {
                                         case let .failure(error): completionHandler(nil, nil, error)
                                         case .success:
-                                            self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: anisetteData, verificationHandler: verificationHandler, completionHandler: completionHandler)
+                                            ALTAppleAPI.withFreshAnisette(fallback: anisetteData) { fresh in self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: fresh, verificationHandler: verificationHandler, completionHandler: completionHandler) }
                                         }
                                     }
                                 } else {
@@ -169,7 +202,7 @@ public extension ALTAppleAPI
                                         switch result {
                                         case let .failure(error): completionHandler(nil, nil, error)
                                         case .success:
-                                            self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: anisetteData, verificationHandler: verificationHandler, completionHandler: completionHandler)
+                                            ALTAppleAPI.withFreshAnisette(fallback: anisetteData) { fresh in self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: fresh, verificationHandler: verificationHandler, completionHandler: completionHandler) }
                                         }
                                     }
                                 }
@@ -181,7 +214,7 @@ public extension ALTAppleAPI
                                     switch result {
                                     case let .failure(error): completionHandler(nil, nil, error)
                                     case .success:
-                                        self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: anisetteData, verificationHandler: verificationHandler, completionHandler: completionHandler)
+                                        ALTAppleAPI.withFreshAnisette(fallback: anisetteData) { fresh in self.authenticate(appleID: unsanitizedAppleID, password: password, anisetteData: fresh, verificationHandler: verificationHandler, completionHandler: completionHandler) }
                                     }
                                 }
 
@@ -276,6 +309,7 @@ private extension ALTAppleAPI {
                 verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode request code task failed: \(error)")
             } else {
                 verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode request code task succeeded")
+                print("[SideStep auth] 2FA code requested (trusted device)")
             }
             do {
                 guard error == nil else { throw error! }
@@ -289,7 +323,7 @@ private extension ALTAppleAPI {
                         request.allHTTPHeaderFields?["security-code"] = verificationCode
 
                         verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode verifying code...")
-                        let verifyCodeTask = self.session.dataTask(with: request) { (data, response, error) in
+                        let verifyCodeTask = ALTAppleAPI.gsaDataTask(with: request) { (data, response, error) in
                             do
                             {
                                 if let error {
@@ -365,7 +399,7 @@ private extension ALTAppleAPI {
             return
         }
 
-        let requestCodeTask = session.dataTask(with: request) { _, response, error in
+        let requestCodeTask = ALTAppleAPI.gsaDataTask(with: request) { _, response, error in
             if let error {
                 verboseLog("[AltSign] requestSMSTwoFactorCode request code task failed: \(error)")
             } else {
@@ -402,7 +436,7 @@ private extension ALTAppleAPI {
                         request.httpBody = bodyData
 
                         verboseLog("[AltSign] requestSMSTwoFactorCode verifying code...")
-                        let verifyCodeTask = self.session.dataTask(with: request) { _, response, error in
+                        let verifyCodeTask = ALTAppleAPI.gsaDataTask(with: request) { _, response, error in
                             do {
                                 if let error {
                                     verboseLog("[AltSign] requestSMSTwoFactorCode verification failed: \(error)")
@@ -498,12 +532,16 @@ private extension ALTAppleAPI {
             ]
 
             verboseLog("[AltSign] sendAuthenticationRequest payload: \(parameters)")
+            print("[SideStep auth] GsService2 o=\(requestParameters["o"] ?? "?")\(ALTAppleAPI.isResynchronizing ? " (after resync)" : "")")
 
             let httpHeaders = [
                 "Content-Type": "text/x-xml-plist",
                 "X-MMe-Client-Info": anisetteData.deviceDescription,
-                "Accept": "*/*",
-                "User-Agent": "AuthKit/1 (Macintosh; OS X 26.5.2) (com.apple.dt.Xcode/26.0)"
+                "Accept": "text/x-xml-plist",
+                "X-Xcode-Version": "27.0 (27A5218g)",
+                "X-Apple-App-Info": "com.apple.gs.xcode.auth",
+                "Connection": "close",
+                "User-Agent": ALTAppleAPI.gsaUserAgent
             ]
 
             let bodyData = try PropertyListSerialization.data(fromPropertyList: parameters, format: .xml, options: 0)
@@ -513,13 +551,22 @@ private extension ALTAppleAPI {
             request.httpBody = bodyData
             httpHeaders.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
 
-            let dataTask = self.session.dataTask(with: request) { (data, response, error) in
+            let dataTask = ALTAppleAPI.gsaDataTask(with: request) { (data, response, error) in
                 do
                 {
                     if let error {
                         verboseLog("[AltSign] sendAuthenticationRequest failed with error: \(error)")
                     }
                     guard let data = data else { throw error ?? ALTAppleAPIError.unknown }
+
+                    // Apple answers non-200 with an HTML page; report the status instead of a plist parse error (3840).
+                    let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? -1
+                    print("[SideStep auth] GsService2 o=\(requestParameters["o"] ?? "?") → HTTP \(httpStatus)")
+                    if httpStatus != 200 {
+                        print("[SideStep auth] GsService2 answered HTTP \(httpStatus) (\(data.count) bytes)")
+                        throw NSError(domain: ALTAppleAPI.gsaHTTPErrorDomain, code: httpStatus,
+                                      userInfo: [NSLocalizedDescriptionKey: "Apple’s sign-in server answered HTTP \(httpStatus). Please try again in a moment."])
+                    }
 
                     guard let responseDictionary = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
                           let dictionary = responseDictionary["Response"] as? [String: Any],
@@ -531,6 +578,9 @@ private extension ALTAppleAPI {
 
                     verboseLog("[AltSign] sendAuthenticationRequest response Status: \(status)")
                     verboseLog("[AltSign] sendAuthenticationRequest response Data: \(dictionary)")
+
+                    // hsc 434 = anisette out of sync: handed back to authenticate(), which resyncs once.
+                    if status["hsc"] as? Int == 434 { return completionHandler(.success(dictionary)) }
 
                     let errorCode = status["ec"] as? Int ?? 0
                     guard errorCode != 0 else { return completionHandler(.success(dictionary)) }
@@ -570,12 +620,13 @@ private extension ALTAppleAPI {
         let encodedIdentityToken = identityTokenData.base64EncodedString()
 
         let httpHeaders = [
-            "Accept": "application/x-buddyml",
+            "Accept": "text/x-xml-plist",
             "Accept-Language": "en-us",
-            "Content-Type": "application/x-plist",
-            "User-Agent": "Xcode",
+            "Content-Type": "text/x-xml-plist",
+            "Connection": "close",
+            "User-Agent": ALTAppleAPI.gsaUserAgent,
             "X-Apple-App-Info": "com.apple.gs.xcode.auth",
-            "X-Xcode-Version": "11.2 (11B41)",
+            "X-Xcode-Version": "27.0 (27A5218g)",
             "X-Apple-Identity-Token": encodedIdentityToken,
             "X-Apple-I-MD-M": anisetteData.machineID,
             "X-Apple-I-MD": anisetteData.oneTimePassword,
@@ -624,5 +675,42 @@ private extension Data {
         let tag        = Data(self[(self.count - tagSize)...])
 
         return CoreCryptoBridge.aesGCMDecrypt(key: sessionKey, nonce: nonce, aad: aad, ciphertext: ciphertext, tag: tag)
+    }
+}
+
+
+// Apple's GSA edge answers HTTP 503 to the 3rd+ request on a reused keep-alive connection
+// (AltStore issue #1782, AltSign PR #52). Give every gsa.apple.com request its own session.
+extension ALTAppleAPI {
+    /// User-Agent for GrandSlam (gsa.apple.com) requests. Must match the client that generated the
+    /// anisette (anisette-v3 servers report it in /v3/client_info); set by SideloaderKit's Anisette.
+    public static var authenticationUserAgent: String?
+    static var gsaUserAgent: String { authenticationUserAgent ?? "akd/1.0 CFNetwork/808.1.4" }
+
+    /// Called once when GrandSlam answers hsc 434 (anisette out of sync) with X-Apple-I-MD-DATA;
+    /// must return resynchronized anisette. Set by SideloaderKit's Anisette (server path).
+    public static var anisetteResyncHandler: ((String, @escaping (ALTAnisetteData?, Error?) -> Void) -> Void)?
+    static var isResynchronizing = false
+
+    /// Returns fresh anisette from the current provider (each GrandSlam step after the first
+    /// sign-in should use fresh anisette, as AltSign's anisetteDataRefreshHandler does).
+    public static var anisetteRefreshHandler: ((@escaping (ALTAnisetteData?, Error?) -> Void) -> Void)?
+    static let gsaHTTPErrorDomain = "SideStep.GrandSlamHTTP"
+
+    static func withFreshAnisette(fallback: ALTAnisetteData, _ body: @escaping (ALTAnisetteData) -> Void) {
+        guard let refresh = anisetteRefreshHandler else { return body(fallback) }
+        refresh { data, error in
+            if let error { print("[SideStep auth] anisette refresh failed (\(error.localizedDescription)) — using previous data") }
+            body(data ?? fallback)
+        }
+    }
+
+    static func gsaDataTask(with request: URLRequest,
+                            completionHandler: @escaping (Data?, URLResponse?, Error?) -> Void) -> URLSessionDataTask {
+        let oneShot = URLSession(configuration: .ephemeral)
+        return oneShot.dataTask(with: request) { data, response, error in
+            completionHandler(data, response, error)
+            oneShot.finishTasksAndInvalidate()
+        }
     }
 }

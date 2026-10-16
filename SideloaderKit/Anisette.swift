@@ -4,8 +4,8 @@
 //  1. LOCAL — this Mac's own AOSKit/AuthKit (private frameworks). Works through macOS 26.
 //     On macOS 27 `adid` refuses non-Apple-entitled callers ("CNE!", AOSKit logs
 //     "Info request failed: -45070") and AOSUtilities returns no headers (GitHub issue #6).
-//  2. REMOTE — an anisette-v3 server (github.com/Dadoum/anisette-v3-server; default =
-//     SideStore's public one). The server never sees the Apple ID or password: it only
+//  2. REMOTE — an anisette-v3 server (github.com/Dadoum/anisette-v3-server) that serves
+//     Windows (iTunes) anisette. The server never sees the Apple ID or password: it only
 //     runs Apple's ADI code. On first use this Mac provisions its own virtual device
 //     (identifier + adi.pb, kept in ~/Library/Application Support/SideStep/anisette-v3.json),
 //     relaying the provisioning messages between the server and Apple; after that each
@@ -21,16 +21,14 @@ import CryptoKit
 import Network
 
 public enum Anisette {
-    public static let defaultServer = "https://ani.sidestore.io"
-    /// The device description sent to Apple (X-MMe-Client-Info) with server anisette. Since
-    /// ~2026-10-12 Apple answers -80045 "This action cannot be completed at this time" to the
-    /// servers' own "<MacBookPro13,2> <macOS;13.1;…>" identity — SideStore, AltStore and xtool
-    /// all broke (SideStore issues #1647/#1652). Presenting as an Android device (the Apple
-    /// Music libraries the servers run ARE Android's) is the community fix and tested OK
-    /// 2026-10-14. Override for experiments with env SIDESTEP_ANISETTE_CLIENTINFO.
-    static let appleClientInfo = "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-    /// Tried when the default server is unreachable (same operator, same protocol).
-    static let backupServers = ["https://ani.sidestore.app"]
+    /// Since 2026-10-12 Apple rejects anisette generated with Android's CoreADI (-80045 with a Mac
+    /// client info; since 2026-10-14 HTTP 503 for any Android client info). Only anisette from
+    /// Windows' iTunes ADI is accepted, and only when X-MMe-Client-Info and User-Agent are the
+    /// ones the anisette server reports for that client (AltStore 22f766d, AltSign PR #61).
+    /// So: use Windows anisette-v3 servers and send their own client_info/user_agent.
+    public static let defaultServer = "https://ani.jkcoxson.com"
+    /// Other Windows anisette servers, tried when the default one fails.
+    static let backupServers = ["https://ani2.stikstore.app"]
     private static let serverKey = "sidestep.anisetteServer"
 
     /// Posted (on any thread) whenever `lastFailure` changes, so the UI can show/clear it.
@@ -110,7 +108,7 @@ public enum Anisette {
 
     static func candidateServers() -> [String] {
         let s = serverURL
-        return s == defaultServer ? [s] + backupServers : [s, defaultServer]
+        return s == defaultServer ? [s] + backupServers : [s, defaultServer] + backupServers
     }
 
     public static var macOSVersion: String {
@@ -190,7 +188,7 @@ public enum Anisette {
 
     /// This Mac's provisioning state per server: a random 16-byte identifier (base64) and,
     /// once provisioned, the adi.pb blob the server hands back.
-    struct V3State: Codable { var identifier: String; var adiPb: String? }
+    struct V3State: Codable { var identifier: String; var adiPb: String?; var clientInfo: String? = nil }
     private static let statePath = SideStepSupportDir + "/anisette-v3.json"
     static func loadState(_ server: String) -> V3State? {
         guard let d = FileManager.default.contents(atPath: statePath),
@@ -224,9 +222,30 @@ public enum Anisette {
             defer { session.finishTasksAndInvalidate() }
             let info = try clientInfo()
             var state = Anisette.loadState(server) ?? V3State(identifier: Self.newIdentifier(), adiPb: nil)
+            // An identity provisioned under a different client info (e.g. an old Android/Mac one) is
+            // useless now: start a fresh identity for this server's client.
+            if state.clientInfo != info.clientInfo {
+                state = V3State(identifier: Self.newIdentifier(), adiPb: nil, clientInfo: info.clientInfo)
+            }
             if state.adiPb == nil {
                 state.adiPb = try provision(identifier: state.identifier, info: info)
                 Anisette.saveState(state, server)
+            }
+            // GrandSlam only accepts the User-Agent of the client that generated the anisette.
+            ALTAppleAPI.authenticationUserAgent = info.userAgent
+            // On hsc 434 (anisette out of sync) AltSign asks us once for resynchronized anisette.
+            let srv = server
+            ALTAppleAPI.anisetteResyncHandler = { sim, done in
+                DispatchQueue.global().async {
+                    do { done(try Remote(server: srv).resync(sim: sim), nil) }
+                    catch { done(nil, error) }
+                }
+            }
+            ALTAppleAPI.anisetteRefreshHandler = { done in
+                DispatchQueue.global().async {
+                    do { done(try Remote(server: srv).fetch(), nil) }
+                    catch { done(nil, error) }
+                }
             }
             do {
                 return try headers(state, info)
@@ -237,6 +256,16 @@ public enum Anisette {
                 Anisette.saveState(state, server)
                 return try headers(state, info)
             }
+        }
+
+        /// Fresh headers for the already provisioned identity, resynchronized with Apple's
+        /// X-Apple-I-MD-DATA from an hsc 434 answer.
+        func resync(sim: String) throws -> ALTAnisetteData {
+            defer { session.finishTasksAndInvalidate() }
+            let info = try clientInfo()
+            guard let state = Anisette.loadState(server), state.adiPb != nil else { throw SideErr.fail("resync: not provisioned") }
+            print("[SideStep anisette] resynchronizing with \(Anisette.host(server)) (hsc 434)")
+            return try headers(state, info, sim: sim)
         }
 
         static func newIdentifier() -> String {
@@ -253,9 +282,11 @@ public enum Anisette {
             guard let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   let ci = j["client_info"] as? String, let ua = j["user_agent"] as? String
             else { throw SideErr.fail("not an anisette-v3 server (no client_info)") }
-            _ = ci   // the server's own (Mac) client info — Apple rejects it now; see appleClientInfo
             let override = ProcessInfo.processInfo.environment["SIDESTEP_ANISETTE_CLIENTINFO"]
-            return ClientInfo(clientInfo: override ?? Anisette.appleClientInfo, userAgent: ua)
+            guard override != nil || ci.contains("<Windows;") else {
+                throw SideErr.fail("not a Windows anisette server (client_info \(ci)) — Apple only accepts Windows anisette now")
+            }
+            return ClientInfo(clientInfo: override ?? ci, userAgent: ua)
         }
 
         func identity(_ identifier: String) -> (mdLu: String, deviceID: String) {
@@ -265,11 +296,18 @@ public enum Anisette {
         }
 
         /// POST /v3/get_headers {identifier, adi_pb} → X-Apple-I-MD / -MD-M / -MD-RINFO.
-        func headers(_ s: V3State, _ info: ClientInfo) throws -> ALTAnisetteData {
+        func headers(_ s: V3State, _ info: ClientInfo, sim: String? = nil) throws -> ALTAnisetteData {
             var req = URLRequest(url: base.appendingPathComponent("v3/get_headers"))
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: ["identifier": s.identifier, "adi_pb": s.adiPb ?? ""])
+            var body: [String: Any] = ["identifier": s.identifier, "adi_pb": s.adiPb ?? ""]
+            if let sim {
+                // Resync after GrandSlam hsc 434: pass Apple's X-Apple-I-MD-DATA plus our device ids
+                // (as AltStore 22f766d does).
+                let id = identity(s.identifier)
+                body["sim"] = sim; body["device_id"] = id.deviceID; body["md_lu"] = id.mdLu
+            }
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (d, _) = try send(req)
             guard let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { throw SideErr.fail("get_headers returned non-JSON") }
             if (j["result"] as? String) == "GetHeadersError" { throw SideErr.fail("get_headers: \(j["message"] as? String ?? "error")") }

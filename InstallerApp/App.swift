@@ -395,6 +395,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         guard let submit = submit2FA else { return }
         loginStage = .working; loginStatus = "Verifying…"
         let c = code.trimmingCharacters(in: .whitespaces); submit2FA = nil
+        print("[SideStep auth] 2FA code entered")
         DispatchQueue.global().async { submit(c) }
     }
     func cancelLogin() { addingAccount = false; loginStage = .idle; loginStatus = ""; password = ""; code = "" }
@@ -1356,12 +1357,12 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     }
 
     /// Settings ▸ "Anisette server": where SideStep gets Apple's sign-in headers when this Mac
-    /// can't generate them itself (macOS 27+). Any anisette-v3 server works.
+    /// can't generate them itself (macOS 27+). Must be an anisette-v3 server that serves Windows (iTunes) anisette.
     func promptAnisetteServer() {
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
         a.messageText = "Anisette server"
-        a.informativeText = "Apple requires special “anisette” headers to sign in. SideStep makes them on this Mac when macOS allows it (macOS 26 and earlier); otherwise it asks an anisette-v3 server. The server never sees your Apple ID or password.\n\nDefault: \(Anisette.defaultServer) (run by SideStore)."
+        a.informativeText = "Apple requires special “anisette” headers to sign in. SideStep makes them on this Mac when macOS allows it (macOS 26 and earlier); otherwise it asks an anisette-v3 server. Apple currently only accepts Windows (iTunes) anisette, so the server must report a Windows client. The server never sees your Apple ID or password.\n\nDefault: \(Anisette.defaultServer)."
         let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
         tf.stringValue = Anisette.serverURL
         tf.placeholderString = Anisette.defaultServer
