@@ -55,9 +55,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decent-icon.png",
       "versions": [
         {
-          "version": "0.9.0",
-          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.9.0/decaid-ios-unsigned-latest.ipa",
-          "size": 45881258
+          "version": "0.9.1-beta.1",
+          "downloadURL": "https://github.com/decentespresso/decaid/releases/download/v0.9.1-beta.1/decaid-ios-unsigned-latest.ipa",
+          "size": 45914869
         }
       ]
     },
