@@ -83,9 +83,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/dcamp-icon.png",
       "versions": [
         {
-          "version": "1.22",
-          "downloadURL": "https://github.com/johnbuckman/dcamp-ios/releases/download/v1.22/dcamp.ipa",
-          "size": 2483417
+          "version": "1.23",
+          "downloadURL": "https://github.com/johnbuckman/dcamp-ios/releases/download/v1.23/dcamp.ipa",
+          "size": 2503258
         }
       ]
     },
