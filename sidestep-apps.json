@@ -97,9 +97,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decent-cocktails-icon.png",
       "versions": [
         {
-          "version": "0.1.0",
-          "downloadURL": "https://github.com/decentespresso/cocktails-ios/releases/download/v0.1.0/decent-cocktails.ipa",
-          "size": 15587208
+          "version": "0.1.1",
+          "downloadURL": "https://github.com/decentespresso/cocktails-ios/releases/download/v0.1.1/decent-cocktails.ipa",
+          "size": 30885517
         }
       ]
     },
