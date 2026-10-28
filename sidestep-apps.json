@@ -90,6 +90,20 @@
       ]
     },
     {
+      "name": "Decent Cocktails",
+      "bundleIdentifier": "com.decentespresso.cocktails",
+      "developerName": "Decent Espresso",
+      "localizedDescription": "Every cocktail from The PDT Cocktail Book and Death & Co: Modern Classic Cocktails, weighed to the gram and working offline. Browse by spirit, ingredient, glass and sweetness; resize a recipe for a round or a less boozy drink; and make it step by step on the Half Decent Scale over Bluetooth. Sign in with your decentespresso.com account for Your Bar, your Wishlist and the cocktails you’ve made, shared with the website. In English, German, French, Spanish, Korean, Arabic and Chinese. Requires iOS 17.",
+      "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decent-cocktails-icon.png",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "downloadURL": "https://github.com/decentespresso/cocktails-ios/releases/download/v0.1.0/decent-cocktails.ipa",
+          "size": 15587208
+        }
+      ]
+    },
+    {
       "name": "Decent Timer",
       "bundleIdentifier": "com.decentespresso.kitchentimer",
       "developerName": "John Buckman",
