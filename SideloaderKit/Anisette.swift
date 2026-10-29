@@ -24,7 +24,7 @@ public enum Anisette {
     /// Anisette only works together with a matching X-MMe-Client-Info/User-Agent pair (AltStore 22f766d,
     /// AltSign PR #61), and the servers describe a decade-old Mac (<MacBookPro13,3> <Mac OS X;10.12.6;…>).
     /// For that client Apple accepts the 2FA push request with HTTP 200 and then delivers nothing, so
-    /// every code entered comes back -21669 (issue #4). Report this Mac instead — see thisMacClientInfo.
+    /// every code entered comes back -21669 (issue #4). So we report a modern Mac instead — see ClientIdentity.
     public static let defaultServer = "https://ani.jkcoxson.com"
     /// Other anisette servers, tried when the default one fails.
     static let backupServers = ["https://ani2.stikstore.app"]
@@ -147,12 +147,19 @@ public enum Anisette {
 
     /// Who we tell Apple is signing in when the anisette comes from a server. Apple has wanted each
     /// at different times: the server's own client_info (Windows/iTunes servers, mc-k on macOS 27.0.1,
-    /// 0.2.69) and this Mac (Mac-identity servers, issue #4). authenticate() tries the preferred one
-    /// and falls back to the other.
+    /// 0.2.69), this Mac (Vid, issue #4, 0.2.70) and iLoader 2.4.1's fixed modern Mac (Jeff, issue #9:
+    /// with this Mac his codes came back -21669, with the server's identity Apple asked for 2FA again
+    /// after every verified code). authenticate() tries the preferred one and falls back once.
     public enum ClientIdentity: String {
-        case server, thisMac
-        var other: ClientIdentity { self == .server ? .thisMac : .server }
+        case server, thisMac, iloader
+        /// The identity tried after this one fails.
+        var fallback: ClientIdentity { self == .iloader ? .thisMac : .iloader }
     }
+
+    /// nab138/iloader d319ce7 (v2.4.1): "just temporary while waiting for the anisette servers to
+    /// start reporting this". Its User-Agent is deliberately the server's without the Darwin part.
+    static let iloaderClientInfo = "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+    static let iloaderUserAgent = "akd/1.0 CFNetwork/811.5.4"
 
     /// Set by authenticate() for the length of one sign-in attempt, so the 2FA refresh/resync calls
     /// made during it use the same identity. nil = the preferred one.
@@ -174,11 +181,11 @@ public enum Anisette {
         UserDefaults.standard.string(forKey: workingIdentityKey(server)).flatMap(ClientIdentity.init(rawValue:))
     }
 
-    /// The identity to try first: SIDESTEP_ANISETTE_IDENTITY=server|thisMac (testing), else the one that
-    /// last worked with this server, else the server's own when it is a Windows server, else this Mac.
+    /// The identity to try first: SIDESTEP_ANISETTE_IDENTITY=server|thisMac|iloader (testing), else the one
+    /// that last worked with this server, else the server's own when it is a Windows server, else iLoader's.
     static func preferredIdentity(_ server: String, serverClientInfo ci: String) -> ClientIdentity {
         if let forced = ProcessInfo.processInfo.environment["SIDESTEP_ANISETTE_IDENTITY"].flatMap(ClientIdentity.init(rawValue:)) { return forced }
-        return workingIdentity(server) ?? (ci.contains("<Windows;") ? .server : .thisMac)
+        return workingIdentity(server) ?? (ci.contains("<Windows;") ? .server : .iloader)
     }
 
     /// Sign in with fresh anisette. With server anisette, if Apple rejects the first attempt, sign in
@@ -211,8 +218,8 @@ public enum Anisette {
                     }
                     if identity == nil, let error, shouldRetryWithOtherIdentity(error, answeredCode: answeredCode) {
                         let ns = error as NSError
-                        print("[SideStep anisette] sign-in as \(used.identity.rawValue) via \(host(used.server)) failed (\(ns.domain) \(ns.code)) — retrying as \(used.identity.other.rawValue)")
-                        DispatchQueue.global().async { attempt(used.identity.other) }
+                        print("[SideStep anisette] sign-in as \(used.identity.rawValue) via \(host(used.server)) failed (\(ns.domain) \(ns.code)) — retrying as \(used.identity.fallback.rawValue)")
+                        DispatchQueue.global().async { attempt(used.identity.fallback) }
                         return
                     }
                     completionHandler(account, session, error)
@@ -222,6 +229,8 @@ public enum Anisette {
     }
 
     private static func shouldRetryWithOtherIdentity(_ error: Error, answeredCode: Bool) -> Bool {
+        // A verified code followed by another 2FA request means Apple doesn't trust this identity.
+        if (error as NSError).domain == ALTAppleAPI.twoFactorAskedAgainErrorDomain { return true }
         if let e = error as? ALTAppleAPIError {
             switch e {
             case .incorrectCredentials, .requiresTwoFactorAuthentication: return false
@@ -409,11 +418,14 @@ public enum Anisette {
                   let ci = j["client_info"] as? String, let ua = j["user_agent"] as? String
             else { throw SideErr.fail("not an anisette-v3 server (no client_info)") }
             let override = ProcessInfo.processInfo.environment["SIDESTEP_ANISETTE_CLIENTINFO"]
-            // Either the server's own client_info or this Mac (see ClientIdentity). The User-Agent is
-            // always the server's.
+            // The server's own client_info, this Mac, or iLoader's pair (see ClientIdentity). Only the
+            // iLoader identity changes the User-Agent.
             let identity = Anisette.identityOverride ?? Anisette.preferredIdentity(server, serverClientInfo: ci)
-            return ClientInfo(clientInfo: override ?? (identity == .server ? ci : Anisette.thisMacClientInfo), userAgent: ua,
-                              identity: identity, stateKey: identity == .server ? server : server + " thisMac")
+            switch identity {
+            case .server:  return ClientInfo(clientInfo: override ?? ci, userAgent: ua, identity: identity, stateKey: server)
+            case .thisMac: return ClientInfo(clientInfo: override ?? Anisette.thisMacClientInfo, userAgent: ua, identity: identity, stateKey: server + " thisMac")
+            case .iloader: return ClientInfo(clientInfo: override ?? Anisette.iloaderClientInfo, userAgent: Anisette.iloaderUserAgent, identity: identity, stateKey: server + " iloader")
+            }
         }
 
         func identity(_ identifier: String) -> (mdLu: String, deviceID: String) {

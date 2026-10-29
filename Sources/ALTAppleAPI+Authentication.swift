@@ -532,7 +532,7 @@ private extension ALTAppleAPI {
 }
 
 private extension ALTAppleAPI {
-    func sendAuthenticationRequest(parameters requestParameters: [String: Any], anisetteData: ALTAnisetteData, completionHandler: @escaping (Result<[String: Any], Error>) -> Void) {
+    func sendAuthenticationRequest(parameters requestParameters: [String: Any], anisetteData: ALTAnisetteData, retries429: Int = 3, completionHandler: @escaping (Result<[String: Any], Error>) -> Void) {
         do {
             let requestURL = URL(string: "https://gsa.apple.com/grandslam/GsService2")!
 
@@ -572,6 +572,22 @@ private extension ALTAppleAPI {
                     // Apple answers non-200 with an HTML page; report the status instead of a plist parse error (3840).
                     let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? -1
                     print("[SideStep auth] GsService2 o=\(requestParameters["o"] ?? "?") → HTTP \(httpStatus)")
+                    // iLoader 2.4.1 retries transient 429s from this endpoint (Jeff Heller, issue #9). Keep the
+                    // same handshake and payload; no new anisette, identity or 2FA code is needed.
+                    if httpStatus == 429, retries429 > 0 {
+                        let retryAfter = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")
+                        // Honor short numeric Retry-After values; longer or non-numeric waits go to the caller
+                        // rather than retrying earlier than Apple asked.
+                        let delay = retryAfter.flatMap(Double.init) ?? (retryAfter == nil ? 1.0 : .infinity)
+                        if delay.isFinite, delay >= 0, delay <= 30 {
+                            print("[SideStep auth] HTTP 429 — retrying in \(max(1, delay)) s (\(retries429) retries left)")
+                            DispatchQueue.global().asyncAfter(deadline: .now() + max(1, delay)) {
+                                self.sendAuthenticationRequest(parameters: requestParameters, anisetteData: anisetteData,
+                                                               retries429: retries429 - 1, completionHandler: completionHandler)
+                            }
+                            return
+                        }
+                    }
                     if httpStatus != 200 {
                         print("[SideStep auth] GsService2 answered HTTP \(httpStatus) (\(data.count) bytes)")
                         throw NSError(domain: ALTAppleAPI.gsaHTTPErrorDomain, code: httpStatus,
@@ -799,6 +815,9 @@ extension ALTAppleAPI {
         set { gsaStateLock.withLock { _anisetteRefreshHandler = newValue } }
     }
     static let gsaHTTPErrorDomain = "SideStep.GrandSlamHTTP"
+    /// Apple verified the 2FA code, then asked for another one on the sign-in that followed: it doesn't
+    /// trust the device identity we reported (issue #9 — before this, SideStep texted code after code).
+    public static let twoFactorAskedAgainErrorDomain = "SideStep.TwoFactorAskedAgain"
 
     /// The sign-in that follows a resync or a 2FA validation. Apple's GSA edge sometimes answers
     /// it with HTTP 503 (mc-k, macOS 27 / ani.jkcoxson.com: "a second attempt works"), so on 503
@@ -807,8 +826,15 @@ extension ALTAppleAPI {
                                  verificationHandler: ((@escaping (String?) -> Void) -> Void)?, attempt: Int = 1,
                                  completionHandler: @escaping (ALTAccount?, ALTAppleAPISession?, Error?) -> Void) {
         ALTAppleAPI.withFreshAnisette(fallback: fallback) { fresh in
+            // After a verified code the sign-in must go through without 2FA, so don't let it ask again.
+            let afterCode = step == "2FA"
             self.authenticate(appleID: appleID, password: password, anisetteData: fresh,
-                              verificationHandler: verificationHandler) { account, session, error in
+                              verificationHandler: afterCode ? nil : verificationHandler) { account, session, error in
+                if afterCode, (error as? ALTAppleAPIError) == .requiresTwoFactorAuthentication {
+                    print("[SideStep auth] Apple verified the code but asked for 2FA again — not asking for another code")
+                    return completionHandler(nil, nil, NSError(domain: ALTAppleAPI.twoFactorAskedAgainErrorDomain, code: 1, userInfo: [NSLocalizedDescriptionKey:
+                        "Apple accepted the verification code but then asked for another one, so it doesn’t trust this sign-in. Try again later, or set a different anisette server in SideStep ▸ Settings."]))
+                }
                 guard let e = error as NSError?, e.domain == ALTAppleAPI.gsaHTTPErrorDomain, e.code == 503, attempt <= 2 else {
                     return completionHandler(account, session, error)
                 }
