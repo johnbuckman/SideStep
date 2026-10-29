@@ -23,6 +23,11 @@ public final class ALTAnisetteData: NSObject, NSCopying, NSSecureCoding {
     public var locale: Locale
     public var timeZone: TimeZone
 
+    /// X-Apple-Locale as Apple accepts it. Locale.current can carry keywords — this Mac reports
+    /// "en_SI@currency=EUR" — and any "@" modifier makes Apple answer HTTP 500 to /auth (and so to
+    /// every 2FA request that follows), which costs the whole sign-in (issue #4).
+    public var localeHeader: String { String(locale.identifier.prefix { $0 != "@" }) }
+
     // MARK: Init
 
     @objc

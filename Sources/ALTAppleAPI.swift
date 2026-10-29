@@ -197,8 +197,8 @@ extension ALTAppleAPI {
             "X-Mme-Device-Id": a.deviceUniqueIdentifier,
             "X-MMe-Client-Info": a.deviceDescription,
             "X-Apple-I-Client-Time": dateFormatter.string(from: a.date),
-            "X-Apple-Locale": a.locale.identifier,
-            "X-Apple-I-Locale": a.locale.identifier,
+            "X-Apple-Locale": a.localeHeader,
+            "X-Apple-I-Locale": a.localeHeader,
             "X-Apple-I-TimeZone": a.timeZone.abbreviation(for: a.date) ?? ""        ]
 
         headers.forEach {
@@ -309,7 +309,7 @@ extension ALTAppleAPI {
             "X-Mme-Device-Id": a.deviceUniqueIdentifier,
             "X-MMe-Client-Info": a.deviceDescription,
             "X-Apple-I-Client-Time": dateFormatter.string(from: a.date),
-            "X-Apple-Locale": a.locale.identifier,
+            "X-Apple-Locale": a.localeHeader,
             "X-Apple-I-TimeZone": a.timeZone.abbreviation(for: a.date) ?? ""        ]
 
         headers.forEach {

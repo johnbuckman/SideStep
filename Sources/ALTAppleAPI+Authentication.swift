@@ -296,7 +296,10 @@ private extension ALTAppleAPI {
         let requestURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!
         let verifyURL = URL(string: "https://gsa.apple.com/grandslam/GsService2/validate")!
 
-        let request = makeTwoFactorCodeRequest(url: requestURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+        // JSON content types for the push request: with the plist set Apple answers HTTP 200 and never
+        // delivers anything, which is what made every code entered come back -21669 (issue #4).
+        // The validate step stays plist — that is what Apple answers.
+        let request = makeSMSTwoFactorRequest(url: requestURL, dsid: dsid, idmsToken: idmsToken, anisetteData: freshAnisette(fallback: anisetteData))
 
         let afterRequest: (Data?, URLResponse?, Error?) -> Void = { data, _, error in
             if let error {
@@ -313,7 +316,7 @@ private extension ALTAppleAPI {
                     do {
                         guard let verificationCode = verificationCode else { throw ALTAppleAPIError.requiresTwoFactorAuthentication }
 
-                        var request = self.makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+                        var request = self.makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: self.freshAnisette(fallback: anisetteData))
                         request.allHTTPHeaderFields?["security-code"] = verificationCode
 
                         verboseLog("[AltSign] requestTrustedDeviceTwoFactorCode verifying code...")
@@ -362,6 +365,10 @@ private extension ALTAppleAPI {
             }
         }
 
+        // isideload asks GET /auth for the account's trusted numbers before requesting the push; with
+        // that discovery skipped Apple answers the push request with HTTP 200 but delivers nothing, so
+        // every code entered is rejected with -21669 (issue #4).
+        if !codeAlreadySent { _ = trustedPhoneNumberIDs(dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData) }
         if codeAlreadySent { afterRequest(nil, nil, nil) }
         else { session.dataTask(with: request, completionHandler: afterRequest).resume() }
     }
@@ -372,42 +379,57 @@ private extension ALTAppleAPI {
                                  verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
                                  completionHandler: @escaping (Result<Void, Error>) -> Void) {
         verboseLog("[AltSign] requestSMSTwoFactorCode starting for dsid: \(dsid)")
-        let requestURL = URL(string: "https://gsa.apple.com/auth/verify/phone/put?mode=sms")!
-        let verifyURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode?referrer=/auth/verify/phone/put")!
+        // Apple only texts a code for the id of one of the account's trusted phone numbers, so ask
+        // which exist first (isideload's GET /auth). Upstream AltSign hardcoded "1", which makes
+        // the request answer HTTP 500 when that number has a different id (issue #4).
+        // The lookup can fail — Apple answers an empty HTTP 500 to GET /auth when it comes straight
+        // after a sign-in — so fall back to trying the ids 1…8 with the send itself: a wrong id
+        // answers 500 with an empty body, the right one with the pending-verification challenge.
+        var candidates = trustedPhoneNumberIDs(dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+        if candidates.isEmpty { candidates = Array(1...8) }
+        // JSON phone-verification API, matching isideload (nab138/isideload, auth/apple_account.rs).
+        // The older buddyml form flow (POST …/phone/put + …/securitycode?referrer=…) answers the
+        // request with HTTP 500/405, so no code is ever sent (issue #4). No trailing slash:
+        // "/phone/" answers 405.
+        let requestURL = URL(string: "https://gsa.apple.com/auth/verify/phone")!
+        let verifyURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode")!
 
-        var request = makeTwoFactorCodeRequest(url: requestURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
-        request.httpMethod = "POST"
+        func attempt(_ index: Int) {
+        let numberID = candidates[index]
+        var request = makeSMSTwoFactorRequest(url: requestURL, dsid: dsid, idmsToken: idmsToken, anisetteData: freshAnisette(fallback: anisetteData))
+        request.httpMethod = "PUT"
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["phoneNumber": ["id": numberID], "mode": "sms"])
 
-        do {
-            let bodyXML = [
-                "serverInfo": [
-                    "phoneNumber.id": "1"
-                ]
-            ] as [String: Any]
-
-            let bodyData = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
-            request.httpBody = bodyData
-        } catch {
-            verboseLog("[AltSign] requestSMSTwoFactorCode serialization failed: \(error)")
-            completionHandler(.failure(error))
-            return
-        }
-
-        let requestCodeTask = ALTAppleAPI.gsaDataTask(with: request) { _, response, error in
+        ALTAppleAPI.gsaDataTask(with: request) { data, response, error in
             if let error {
                 verboseLog("[AltSign] requestSMSTwoFactorCode request code task failed: \(error)")
-            } else {
-                verboseLog("[AltSign] requestSMSTwoFactorCode request code task succeeded")
             }
             do {
                 guard error == nil else { throw error! }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                verboseLog("[AltSign] requestSMSTwoFactorCode HTTP \(status)")
-                // Since 2026-10-12 Apple refuses SMS two-factor (HTTP 403) for sign-ins made
-                // with Android anisette (= any anisette server); only a trusted-device push works.
+                let body = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                verboseLog("[AltSign] requestSMSTwoFactorCode HTTP \(status) \(body.prefix(400))")
+                // Don't prompt for a code Apple never sent. 412 = a code is already on its way.
                 if status == 403 {
+                    // Since 2026-10-12 Apple refuses SMS two-factor (HTTP 403) for sign-ins made
+                    // with Android anisette (= any anisette server); only a trusted-device push works.
                     throw NSError(domain: ALTUnderlyingAppleAPIErrorDomain, code: 403, userInfo: [NSLocalizedDescriptionKey:
                         "Apple refused to text a verification code (HTTP 403). Apple doesn’t allow texted codes when the sign-in data comes from an anisette server — sign this Apple ID in on an iPhone, iPad or Mac so the code can be sent there instead."])
+                }
+                if status == 500, body.isEmpty, index + 1 < candidates.count {
+                    verboseLog("[AltSign] requestSMSTwoFactorCode id \(numberID) refused (empty 500) — trying \(candidates[index + 1])")
+                    attempt(index + 1)
+                    return
+                }
+                if !(200..<300).contains(status) {
+                    // Apple answers a send with the pending-verification challenge under 412 — and on some
+                    // accounts under 500 — once a code is on its way; that counts as sent (isideload's
+                    // ActiveChallenge), anything else means no code was sent.
+                    guard self.isPendingSMSChallenge(data, numberID: numberID) else {
+                        throw NSError(domain: ALTUnderlyingAppleAPIErrorDomain, code: status, userInfo: [NSLocalizedDescriptionKey:
+                            "Apple refused to text a verification code (HTTP \(status))\(body.isEmpty ? "" : ": \(body.prefix(200))")"])
+                    }
+                    verboseLog("[AltSign] requestSMSTwoFactorCode HTTP \(status) but the challenge is active — prompting for the code")
                 }
 
                 func responseHandler(verificationCode: String?) {
@@ -415,19 +437,13 @@ private extension ALTAppleAPI {
                     do {
                         guard let verificationCode = verificationCode else { throw ALTAppleAPIError.requiresTwoFactorAuthentication }
 
-                        var request = self.makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+                        var request = self.makeSMSTwoFactorRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: self.freshAnisette(fallback: anisetteData))
                         request.httpMethod = "POST"
-
-                        let bodyXML = [
-                            "securityCode.code": verificationCode,
-                            "serverInfo": [
-                                "mode": "sms",
-                                "phoneNumber.id": "1"
-                            ]
-                        ] as [String: Any]
-
-                        let bodyData = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
-                        request.httpBody = bodyData
+                        request.httpBody = try JSONSerialization.data(withJSONObject: [
+                            "phoneNumber": ["id": numberID],
+                            "mode": "sms",
+                            "securityCode": ["code": verificationCode]
+                        ])
 
                         verboseLog("[AltSign] requestSMSTwoFactorCode verifying code...")
                         let verifyCodeTask = ALTAppleAPI.gsaDataTask(with: request) { _, response, error in
@@ -437,11 +453,11 @@ private extension ALTAppleAPI {
                                 }
                                 guard error == nil else { throw error! }
 
+                                // Apple answers 400 {"serviceErrors":[{"code":"-21669",…}]} for a wrong code.
                                 guard let httpResponse = response as? HTTPURLResponse,
-                                      httpResponse.statusCode == 200,
-                                      httpResponse.allHeaderFields.keys.contains("X-Apple-PE-Token") // PE token is included in headers if we sent correct verification code.
+                                      httpResponse.statusCode == 200
                                 else {
-                                    verboseLog("[AltSign] requestSMSTwoFactorCode verification failed (invalid status code or missing PE token)")
+                                    verboseLog("[AltSign] requestSMSTwoFactorCode verification failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))")
                                     throw ALTAppleAPIError.incorrectVerificationCode
                                 }
 
@@ -462,9 +478,9 @@ private extension ALTAppleAPI {
             } catch {
                 completionHandler(.failure(error))
             }
+        }.resume()
         }
-
-        requestCodeTask.resume()
+        attempt(0)
     }
 
     func fetchAccount(
@@ -629,13 +645,80 @@ private extension ALTAppleAPI {
             "X-Mme-Device-Id": anisetteData.deviceUniqueIdentifier,
             "X-MMe-Client-Info": anisetteData.deviceDescription,
             "X-Apple-I-Client-Time": dateFormatter.string(from: anisetteData.date),
-            "X-Apple-Locale": anisetteData.locale.identifier,
+            "X-Apple-Locale": anisetteData.localeHeader,
             "X-Apple-I-TimeZone": anisetteData.timeZone.abbreviation() ?? "PST"
         ]
 
         var request = URLRequest(url: url)
         httpHeaders.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
 
+        return request
+    }
+
+    /// An anisette one-time password is single-use: sending the sign-in's OTP again on a 2FA request
+    /// makes Apple answer /auth with an empty HTTP 500 and never deliver the push. Ask the anisette
+    /// source for a fresh one (Anisette.fresh installs this hook for the remote path).
+    func freshAnisette(fallback: ALTAnisetteData) -> ALTAnisetteData {
+        guard let handler = ALTAppleAPI.anisetteRefreshHandler else { return fallback }
+        let sem = DispatchSemaphore(value: 0)
+        var fresh: ALTAnisetteData?
+        handler { data, _ in fresh = data; sem.signal() }
+        if sem.wait(timeout: .now() + 25) == .timedOut { verboseLog("[AltSign] fresh anisette timed out — reusing the sign-in's") }
+        return fresh ?? fallback
+    }
+
+    /// True when Apple's answer describes a pending SMS verification for the number we asked for
+    /// (isideload's ActiveChallenge check): nothing locked, not cooling down, right id and mode.
+    func isPendingSMSChallenge(_ data: Data?, numberID: Int) -> Bool {
+        guard let data,
+              let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              (j["mode"] as? String) == "sms",
+              (j["type"] as? String) == "verification",
+              (j["authenticationType"] as? String) == "hsa2",
+              ((j["trustedPhoneNumbers"] as? [[String: Any]]) ?? []).contains(where: { ($0["id"] as? NSNumber)?.intValue == numberID })
+        else { return false }
+        let sc = (j["securityCode"] as? [String: Any]) ?? [:]
+        guard (sc["length"] as? NSNumber)?.intValue == 6 else { return false }
+        return !["tooManyCodesSent", "tooManyCodesValidated", "securityCodeLocked", "securityCodeCooldown"]
+            .contains { (sc[$0] as? NSNumber)?.boolValue == true }
+    }
+
+    /// GET /auth lists the account's trusted phone numbers; Apple's SMS endpoints need one of their
+    /// ids. Blocking on its own ephemeral session: waiting on ALTAppleAPI's session from inside one
+    /// of its completions would deadlock.
+    func trustedPhoneNumberIDs(dsid: String, idmsToken: String, anisetteData: ALTAnisetteData) -> [Int] {
+        var request = makeSMSTwoFactorRequest(url: URL(string: "https://gsa.apple.com/auth")!,
+                                              dsid: dsid, idmsToken: idmsToken,
+                                              anisetteData: freshAnisette(fallback: anisetteData))
+        request.httpMethod = "GET"
+        // Log what goes out (anisette secrets truncated): Apple answers an empty HTTP 500 when a header
+        // is off — an X-Apple-Locale carrying an "@" modifier did exactly that — and the status alone
+        // never says why.
+        let shown = (request.allHTTPHeaderFields ?? [:]).sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value.count > 14 ? String($0.value.prefix(14)) + "…" : $0.value)" }
+            .joined(separator: " ")
+        verboseLog("[AltSign] GET /auth request: \(shown)")
+        let session = URLSession(configuration: .ephemeral)
+        let sem = DispatchSemaphore(value: 0)
+        var status = 0, ids: [Int] = []
+        session.dataTask(with: request) { data, response, _ in
+            status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let json = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]) ?? [:]
+            ids = ((json["trustedPhoneNumbers"] as? [[String: Any]]) ?? []).compactMap { ($0["id"] as? NSNumber)?.intValue }
+            sem.signal()
+        }.resume()
+        if sem.wait(timeout: .now() + 20) == .timedOut { verboseLog("[AltSign] GET /auth timed out") }
+        session.finishTasksAndInvalidate()
+        verboseLog("[AltSign] GET /auth HTTP \(status), trusted phone numbers: \(ids.count) \(ids)")
+        return ids
+    }
+
+    /// The JSON phone-verification endpoints reject the plist headers above.
+    func makeSMSTwoFactorRequest(url: URL, dsid: String, idmsToken: String, anisetteData: ALTAnisetteData) -> URLRequest {
+        var request = makeTwoFactorCodeRequest(url: url, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("27.0 (27A5218g)", forHTTPHeaderField: "X-Xcode-Version")
         return request
     }
 }
