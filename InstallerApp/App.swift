@@ -353,8 +353,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         ALTAppleAPI.preferSMSTwoFactorCode = textMeCode
         loginStage = .working; loginStatus = "Signing in…"
         DispatchQueue.global().async {
-            guard let anisette = Anisette.fresh() else { Task { @MainActor in self.loginStatus = Anisette.lastFailure ?? "Couldn’t get Apple’s sign-in data (anisette)."; self.loginStage = .idle }; return }
-            ALTAppleAPI.sharedAPI.authenticate(appleID: id, password: pw, anisetteData: anisette,
+            Anisette.authenticate(appleID: id, password: pw,
                 verificationHandler: { submit in Task { @MainActor in self.submit2FA = submit; self.loginStage = .needs2FA; self.loginStatus = "Enter the 2-factor code." } },
                 completionHandler: { account, session, error in
                     Task { @MainActor in
