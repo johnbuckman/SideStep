@@ -248,7 +248,8 @@ if args.contains("--anisette") {
     print("    machineID \(a.machineID.count) chars, OTP \(a.oneTimePassword.count) chars, routingInfo \(a.routingInfo)")
     print("    device \(a.deviceDescription)")
     if args.contains("--try-login") {
-        ALTAppleAPI.sharedAPI.authenticate(appleID: "sidestep-anisette-check@example.com", password: "not-a-real-password-123", anisetteData: a,
+        // Through Anisette.authenticate, so a rejected client identity is retried with the other one.
+        Anisette.authenticate(appleID: "sidestep-anisette-check@example.com", password: "not-a-real-password-123",
             verificationHandler: { submit in submit(nil) },
             completionHandler: { _, _, e in
                 let ns = e.map { $0 as NSError }
@@ -264,14 +265,13 @@ if args.contains("--anisette") {
 guard args.count >= 2 else { errln("usage: Provision --install | --source <url> [bundleID] | --refresh | <apple-id> [--sms]"); exit(64) }
 let appleID = args[1]
 ALTAppleAPI.preferSMSTwoFactorCode = args.contains("--sms")
-guard let anisette = Anisette.fresh() else { errln("Anisette generation failed"); exit(1) }
 let pw: String
 if let envpw = ProcessInfo.processInfo.environment["SIDESTEP_PW"], !envpw.isEmpty { pw = envpw }
 else { pw = String(cString: getpass("Apple ID password (no echo): ")) }
 guard !pw.isEmpty else { errln("no password"); exit(1) }
 
-ALTAppleAPI.sharedAPI.authenticate(
-    appleID: appleID, password: pw, anisetteData: anisette,
+Anisette.authenticate(
+    appleID: appleID, password: pw,
     verificationHandler: { submit in
         if let code = ProcessInfo.processInfo.environment["SIDESTEP_2FA"], !code.isEmpty { submit(code) }
         else { FileHandle.standardError.write(Data("2FA code: ".utf8)); submit(readLine()?.trimmingCharacters(in: .whitespaces)) }

@@ -4,8 +4,8 @@
 //  1. LOCAL — this Mac's own AOSKit/AuthKit (private frameworks). Works through macOS 26.
 //     On macOS 27 `adid` refuses non-Apple-entitled callers ("CNE!", AOSKit logs
 //     "Info request failed: -45070") and AOSUtilities returns no headers (GitHub issue #6).
-//  2. REMOTE — an anisette-v3 server (github.com/Dadoum/anisette-v3-server) that serves
-//     Windows (iTunes) anisette. The server never sees the Apple ID or password: it only
+//  2. REMOTE — an anisette-v3 server (github.com/Dadoum/anisette-v3-server). The server
+//     never sees the Apple ID or password: it only
 //     runs Apple's ADI code. On first use this Mac provisions its own virtual device
 //     (identifier + adi.pb, kept in ~/Library/Application Support/SideStep/anisette-v3.json),
 //     relaying the provisioning messages between the server and Apple; after that each
@@ -21,13 +21,12 @@ import CryptoKit
 import Network
 
 public enum Anisette {
-    /// Since 2026-10-12 Apple rejects anisette generated with Android's CoreADI (-80045 with a Mac
-    /// client info; since 2026-10-14 HTTP 503 for any Android client info). Only anisette from
-    /// Windows' iTunes ADI is accepted, and only when X-MMe-Client-Info and User-Agent are the
-    /// ones the anisette server reports for that client (AltStore 22f766d, AltSign PR #61).
-    /// So: use Windows anisette-v3 servers and send their own client_info/user_agent.
+    /// Anisette only works together with a matching X-MMe-Client-Info/User-Agent pair (AltStore 22f766d,
+    /// AltSign PR #61), and the servers describe a decade-old Mac (<MacBookPro13,3> <Mac OS X;10.12.6;…>).
+    /// For that client Apple accepts the 2FA push request with HTTP 200 and then delivers nothing, so
+    /// every code entered comes back -21669 (issue #4). Report this Mac instead — see thisMacClientInfo.
     public static let defaultServer = "https://ani.jkcoxson.com"
-    /// Other Windows anisette servers, tried when the default one fails.
+    /// Other anisette servers, tried when the default one fails.
     static let backupServers = ["https://ani2.stikstore.app"]
     private static let serverKey = "sidestep.anisetteServer"
 
@@ -71,6 +70,7 @@ public enum Anisette {
             switch local() {
             case .success(let a):
                 lastFailure = nil
+                lastRemote = nil
                 // This Mac's own anisette: drop any server-specific settings a server fetch left in
                 // AltSign (server User-Agent, resync/refresh via the server) so they can't leak into
                 // a sign-in that uses local data.
@@ -122,7 +122,121 @@ public enum Anisette {
         return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
+    /// This Mac as Apple's client_info string, e.g.
+    /// "<Mac14,9> <macOS;27.0;26A434> <com.apple.AuthKit/1 (com.apple.akd/1.0)>" — the shape
+    /// AuthKit's serverFriendlyDescription uses. Reported instead of the anisette server's own identity
+    /// when that is a 2016-era Mac: Apple won't deliver 2FA for it (see ClientIdentity).
+    public static let thisMacClientInfo: String = {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        let model = sysctlString("hw.model")
+        let build = sysctlString("kern.osversion")
+        return "<\(model)> <macOS;\(v.majorVersion).\(v.minorVersion);\(build)> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+    }()
+
+    private static func sysctlString(_ name: String) -> String {
+        var size = 0
+        guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 1 else { return "Mac14,9" }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return "Mac14,9" }
+        return String(cString: buffer)
+    }
+
     public static func host(_ server: String) -> String { URL(string: server)?.host ?? server }
+
+    // MARK: - Client identity for server anisette
+
+    /// Who we tell Apple is signing in when the anisette comes from a server. Apple has wanted each
+    /// at different times: the server's own client_info (Windows/iTunes servers, mc-k on macOS 27.0.1,
+    /// 0.2.69) and this Mac (Mac-identity servers, issue #4). authenticate() tries the preferred one
+    /// and falls back to the other.
+    public enum ClientIdentity: String {
+        case server, thisMac
+        var other: ClientIdentity { self == .server ? .thisMac : .server }
+    }
+
+    /// Set by authenticate() for the length of one sign-in attempt, so the 2FA refresh/resync calls
+    /// made during it use the same identity. nil = the preferred one.
+    private static var _identityOverride: ClientIdentity?
+    static var identityOverride: ClientIdentity? {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _identityOverride }
+        set { stateLock.lock(); _identityOverride = newValue; stateLock.unlock() }
+    }
+    /// Server + identity of the last remote fetch; nil when the last fresh() used this Mac's own anisette.
+    private static var _lastRemote: (server: String, identity: ClientIdentity)?
+    static var lastRemote: (server: String, identity: ClientIdentity)? {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _lastRemote }
+        set { stateLock.lock(); _lastRemote = newValue; stateLock.unlock() }
+    }
+
+    private static func workingIdentityKey(_ server: String) -> String { "sidestep.anisetteIdentity." + host(server) }
+    /// The identity that last signed in successfully through this server.
+    static func workingIdentity(_ server: String) -> ClientIdentity? {
+        UserDefaults.standard.string(forKey: workingIdentityKey(server)).flatMap(ClientIdentity.init(rawValue:))
+    }
+
+    /// The identity to try first: SIDESTEP_ANISETTE_IDENTITY=server|thisMac (testing), else the one that
+    /// last worked with this server, else the server's own when it is a Windows server, else this Mac.
+    static func preferredIdentity(_ server: String, serverClientInfo ci: String) -> ClientIdentity {
+        if let forced = ProcessInfo.processInfo.environment["SIDESTEP_ANISETTE_IDENTITY"].flatMap(ClientIdentity.init(rawValue:)) { return forced }
+        return workingIdentity(server) ?? (ci.contains("<Windows;") ? .server : .thisMac)
+    }
+
+    /// Sign in with fresh anisette. With server anisette, if Apple rejects the first attempt, sign in
+    /// once more reporting the other client identity, and remember whichever worked. Not retried: a
+    /// wrong password, and a 2FA prompt the caller couldn't answer (unattended re-login). A rejected
+    /// 2FA code IS retried, with a new code: for the wrong identity Apple accepts the push request and
+    /// delivers nothing, so every code comes back -21669 (issue #4).
+    public static func authenticate(appleID: String, password: String,
+                                    verificationHandler: ((@escaping (String?) -> Void) -> Void)?,
+                                    completionHandler: @escaping (ALTAccount?, ALTAppleAPISession?, Error?) -> Void) {
+        func attempt(_ identity: ClientIdentity?) {
+            identityOverride = identity
+            guard let anisette = fresh() else {
+                identityOverride = nil
+                return completionHandler(nil, nil, SideErr.fail(lastFailure ?? "Couldn’t get Apple’s sign-in data (anisette)."))
+            }
+            let used = lastRemote
+            var answeredCode = false
+            let vh = verificationHandler.map { handler in
+                { (submit: @escaping (String?) -> Void) in handler { code in answeredCode = code != nil; submit(code) } }
+            }
+            ALTAppleAPI.sharedAPI.authenticate(appleID: appleID, password: password, anisetteData: anisette,
+                verificationHandler: vh,
+                completionHandler: { account, session, error in
+                    identityOverride = nil
+                    guard let used else { return completionHandler(account, session, error) }
+                    if account != nil {
+                        UserDefaults.standard.set(used.identity.rawValue, forKey: workingIdentityKey(used.server))
+                        return completionHandler(account, session, error)
+                    }
+                    if identity == nil, let error, shouldRetryWithOtherIdentity(error, answeredCode: answeredCode) {
+                        let ns = error as NSError
+                        print("[SideStep anisette] sign-in as \(used.identity.rawValue) via \(host(used.server)) failed (\(ns.domain) \(ns.code)) — retrying as \(used.identity.other.rawValue)")
+                        DispatchQueue.global().async { attempt(used.identity.other) }
+                        return
+                    }
+                    completionHandler(account, session, error)
+                })
+        }
+        attempt(nil)
+    }
+
+    private static func shouldRetryWithOtherIdentity(_ error: Error, answeredCode: Bool) -> Bool {
+        if let e = error as? ALTAppleAPIError {
+            switch e {
+            case .incorrectCredentials, .requiresTwoFactorAuthentication: return false
+            case .incorrectVerificationCode: return answeredCode
+            default: break
+            }
+        }
+        // Apple took the anisette and answered about the account itself (-20970 "account information
+        // entered incorrectly", -20209 locked): the other identity would get the same answer.
+        let ns = error as NSError
+        if ns.domain == ALTUnderlyingAppleAPIErrorDomain, [-20970, -20209, -20101, -22406].contains(ns.code) { return false }
+        // After a code was entered, only a rejected code means "wrong identity"; anything else
+        // would make the user wait for, and type, a second code for nothing.
+        return !answeredCode
+    }
 
     // MARK: - Local (AOSKit / AuthKit)
 
@@ -227,7 +341,7 @@ public enum Anisette {
             guard base.scheme == "https" || base.scheme == "http" else { throw SideErr.fail("not an http(s) URL") }
             defer { session.finishTasksAndInvalidate() }
             let info = try clientInfo()
-            var state = Anisette.loadState(server) ?? V3State(identifier: Self.newIdentifier(), adiPb: nil)
+            var state = Anisette.loadState(info.stateKey) ?? V3State(identifier: Self.newIdentifier(), adiPb: nil)
             // An identity provisioned under a different client info (e.g. an old Android/Mac one) is
             // useless now: start a fresh identity for this server's client.
             if state.clientInfo != info.clientInfo {
@@ -235,8 +349,9 @@ public enum Anisette {
             }
             if state.adiPb == nil {
                 state.adiPb = try provision(identifier: state.identifier, info: info)
-                Anisette.saveState(state, server)
+                Anisette.saveState(state, info.stateKey)
             }
+            Anisette.lastRemote = (server, info.identity)
             // GrandSlam only accepts the User-Agent of the client that generated the anisette.
             ALTAppleAPI.authenticationUserAgent = info.userAgent
             // On hsc 434 (anisette out of sync) AltSign asks us once for resynchronized anisette.
@@ -259,7 +374,7 @@ public enum Anisette {
                 // -45061 = "not provisioned": the server no longer accepts our adi.pb. Re-provision once.
                 print("[SideStep anisette] \(Anisette.host(server)) says not provisioned — re-provisioning")
                 state.adiPb = try provision(identifier: state.identifier, info: info)
-                Anisette.saveState(state, server)
+                Anisette.saveState(state, info.stateKey)
                 return try headers(state, info)
             }
         }
@@ -269,7 +384,7 @@ public enum Anisette {
         func resync(sim: String) throws -> ALTAnisetteData {
             defer { session.finishTasksAndInvalidate() }
             let info = try clientInfo()
-            guard let state = Anisette.loadState(server), state.adiPb != nil else { throw SideErr.fail("resync: not provisioned") }
+            guard let state = Anisette.loadState(info.stateKey), state.adiPb != nil else { throw SideErr.fail("resync: not provisioned") }
             print("[SideStep anisette] resynchronizing with \(Anisette.host(server)) (hsc 434)")
             return try headers(state, info, sim: sim)
         }
@@ -280,7 +395,12 @@ public enum Anisette {
             return Data(b).base64EncodedString()
         }
 
-        struct ClientInfo { let clientInfo, userAgent: String }
+        struct ClientInfo {
+            let clientInfo, userAgent: String
+            let identity: ClientIdentity
+            /// Provisioning state is kept per identity, so switching between them doesn't re-provision.
+            let stateKey: String
+        }
 
         /// GET /v3/client_info → the device description + User-Agent the server's ADI emulates.
         func clientInfo() throws -> ClientInfo {
@@ -289,10 +409,11 @@ public enum Anisette {
                   let ci = j["client_info"] as? String, let ua = j["user_agent"] as? String
             else { throw SideErr.fail("not an anisette-v3 server (no client_info)") }
             let override = ProcessInfo.processInfo.environment["SIDESTEP_ANISETTE_CLIENTINFO"]
-            guard override != nil || ci.contains("<Windows;") else {
-                throw SideErr.fail("not a Windows anisette server (client_info \(ci)) — Apple only accepts Windows anisette now")
-            }
-            return ClientInfo(clientInfo: override ?? ci, userAgent: ua)
+            // Either the server's own client_info or this Mac (see ClientIdentity). The User-Agent is
+            // always the server's.
+            let identity = Anisette.identityOverride ?? Anisette.preferredIdentity(server, serverClientInfo: ci)
+            return ClientInfo(clientInfo: override ?? (identity == .server ? ci : Anisette.thisMacClientInfo), userAgent: ua,
+                              identity: identity, stateKey: identity == .server ? server : server + " thisMac")
         }
 
         func identity(_ identifier: String) -> (mdLu: String, deviceID: String) {

@@ -1442,9 +1442,8 @@ public struct Sideloader {
         if teams != nil { return pair }   // saved session still good
         log("session for \(appleID) expired — signing in again…")
         guard let pw = Keychain.password(for: appleID) else { log("no saved password for \(appleID)"); return nil }
-        guard let anisette = Anisette.fresh() else { log(AccountStore.sessionFailureReason(for: appleID)); return nil }
         let res: (ALTAccount, ALTAppleAPISession)? = try? await withCheckedThrowingContinuation { c in
-            ALTAppleAPI.sharedAPI.authenticate(appleID: appleID, password: pw, anisetteData: anisette,
+            Anisette.authenticate(appleID: appleID, password: pw,
                 verificationHandler: { submit in submit(nil) },   // unattended: can't satisfy a 2FA prompt
                 completionHandler: { a, s, e in if let a, let s { c.resume(returning: (a, s)) } else { c.resume(throwing: e ?? SideErr.fail("reauth")) } })
         }
@@ -1731,15 +1730,14 @@ public struct Sideloader {
             do { _ = try await cont { ALTAppleAPI.sharedAPI.fetchTeams(for: pair.0, session: pair.1, completionHandler: $0) } }
             catch {
                 log("session for \(appleID) expired — re-authenticating…")
-                if let pw = Keychain.password(for: appleID), let anisette = Anisette.fresh() {
+                if let pw = Keychain.password(for: appleID) {
                     let res: (ALTAccount, ALTAppleAPISession)? = try? await withCheckedThrowingContinuation { c in
-                        ALTAppleAPI.sharedAPI.authenticate(appleID: appleID, password: pw, anisetteData: anisette,
+                        Anisette.authenticate(appleID: appleID, password: pw,
                             verificationHandler: { submit in submit(nil) },   // unattended: can't satisfy 2FA
                             completionHandler: { a, s, e in if let a, let s { c.resume(returning: (a, s)) } else { c.resume(throwing: e ?? SideErr.fail("reauth")) } })
                     }
                     if let r = res { pair = r; AccountStore.add(account: r.0, session: r.1) }
-                } else if let why = Anisette.lastFailure {
-                    log("\(appleID): can’t re-authenticate — \(why)")
+                    else if let why = Anisette.lastFailure { log("\(appleID): can’t re-authenticate — \(why)") }
                 }
             }
             for t in apps {
