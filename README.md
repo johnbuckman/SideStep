@@ -5,7 +5,12 @@ iPhone or iPad using your own Apple ID (a free one works). No jailbreak, no spec
 hardware.
 
 <p align="center">
-  <img src="docs/screenshots/sidestep-app-icon.jpg" width="112" alt="The SideStep app icon">
+  <a href="https://www.youtube.com/watch?v=MM5PfgjOk8E"><img src="docs/screenshots/video-tour.jpg" width="640" alt="Watch the 3-minute SideStep tour on YouTube"></a><br>
+  <em>A 3-minute tour of SideStep · <a href="https://johnbuckman.github.io/SideStep/help.html">the full guide</a></em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/appicon.png" width="112" alt="The SideStep app icon">
 </p>
 
 SideStep re-signs and reinstalls your apps in the background within Apple's allowed
@@ -37,7 +42,7 @@ install directly:
 
 ## Download
 
-**[Download SideStep (notarized `.dmg`)](https://github.com/johnbuckman/SideStep/releases)** — macOS 14 (Sonoma) or newer, Apple Silicon.
+**[Download SideStep (notarized `.dmg`)](https://github.com/johnbuckman/SideStep/releases)** — macOS 14 (Sonoma) or newer, Apple silicon or Intel.
 
 Open the `.dmg` and drag **SideStep** to **Applications**. It's signed with an Apple
 **Developer ID** and **notarized by Apple**, so it opens without the right-click /

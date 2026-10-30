@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SideStep Help</title>
+<meta name="description" content="Everything you can do with SideStep: install iOS apps on your own iPhone or iPad with your own Apple ID, and keep them signed and up to date.">
+<link rel="icon" href="screenshots/appicon.png">
+<style>
+/* Same look as the dcamp Help page (decentespresso.com/dcamp/help): warm paper,
+   a sticky table of contents, one section per feature. */
+:root{
+  --bg:#fdf9f3; --panel:#fff; --ink:#1c1c1c; --ink-soft:#5f5f5f; --muted:#8a8579;
+  --line:#ece6db; --line-strong:#ddd5c7; --accent:#16a34a; --link:#1d64c2;
+  --shadow:0 1px 2px rgba(40,30,10,.06), 0 6px 18px rgba(40,30,10,.05);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#16130f; --panel:#211d18; --ink:#ece7dd; --ink-soft:#b8b1a4; --muted:#938c7f;
+    --line:#332e26; --line-strong:#443d32; --accent:#2c8a54; --link:#7ab0f2;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.45);
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+.topbar{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.topbar-in{max-width:1100px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:10px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:17px;color:var(--ink)}
+.brand img{width:28px;height:28px;border-radius:7px}
+.topbar nav{margin-left:auto;display:flex;gap:16px;font-size:14px}
+.topbar nav a{color:var(--ink-soft)}
+.wrap{max-width:1100px;margin:0 auto;padding:26px 16px 80px}
+.page-head h1{margin:0;font-size:27px;letter-spacing:-.02em}
+.page-head .sub{color:var(--muted);font-size:14px;margin-top:3px}
+.help-lead{color:var(--ink-soft);font-size:17px;margin:14px 0 20px;max-width:720px}
+.help-apps{float:right;width:300px;margin:0 0 14px 24px;background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow)}
+.help-apps-title{font-weight:650;font-size:15px}
+.help-apps-sub{color:var(--muted);font-size:13px;margin:2px 0 10px}
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#fff;border-radius:9px;padding:7px 13px;font-weight:600;font-size:14px}
+.btn:hover{text-decoration:none;filter:brightness(1.08)}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line-strong)}
+.help-apps-btns{display:flex;flex-wrap:wrap;gap:6px}
+.help-apps-more{display:inline-block;margin-top:9px;font-size:13px;font-weight:600}
+.help-body{clear:both;display:flex;gap:36px;align-items:flex-start}
+.help-toc{position:sticky;top:70px;flex:none;width:190px;display:flex;flex-direction:column;gap:1px}
+.help-toc a{border-left:2px solid transparent;color:var(--ink-soft);padding:5px 12px;font-size:13.5px;line-height:1.3;border-radius:0 6px 6px 0}
+.help-toc a:hover{background:var(--panel);color:var(--ink);border-left-color:var(--accent);text-decoration:none}
+.help-content{flex:1;min-width:0;max-width:780px}
+.help-sec{padding:22px 0;border-top:1px solid var(--line);scroll-margin-top:64px}
+.help-content .help-sec:first-child{border-top:0;padding-top:0}
+.help-sec h2{margin:0 0 10px;font-size:20px;letter-spacing:-.01em}
+.help-sec h3{margin:18px 0 6px;font-size:16px}
+.help-sec p{margin:0 0 10px;color:var(--ink-soft)}
+.help-sec ul,.help-sec ol{margin:0 0 10px;padding-left:22px;color:var(--ink-soft)}
+.help-sec li{margin:6px 0}
+.help-sec b,.help-sec strong{color:var(--ink);font-weight:650}
+.help-note{font-size:14px;color:var(--muted)!important;border-left:3px solid var(--line-strong);padding-left:12px}
+.help-open{margin:12px 0 2px}
+.help-open a{font-weight:600;font-size:14px}
+.help-shot{display:block;max-width:100%;margin:14px 0 4px;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
+.help-shot.narrow{max-width:420px}
+.help-shot.phone{max-width:300px}
+.help-shot-cap{font-size:12px!important;color:var(--muted)!important;margin:0 0 12px!important}
+.shots{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
+.shots figure{margin:0;flex:1 1 200px;max-width:260px}
+.shots img{width:100%;border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
+.shots figcaption{font-size:12px;color:var(--muted);margin-top:4px}
+kbd{font:12px ui-monospace,Menlo,monospace;background:var(--panel);border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:5px;padding:1px 5px}
+code{font:13px ui-monospace,Menlo,monospace;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+pre{font:13px/1.5 ui-monospace,Menlo,monospace;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-x:auto}
+.foot{margin-top:40px;font-size:13px;color:var(--muted)}
+.help-vid{display:block;width:300px;float:right;clear:right;margin:0 0 14px 24px;padding:0;border:1px solid var(--line-strong);border-radius:12px;overflow:hidden;background:var(--panel);cursor:pointer;box-shadow:var(--shadow)}
+.help-vid img{display:block;width:100%;height:auto}
+.help-vid:hover{box-shadow:0 10px 30px rgba(0,0,0,.18)}
+.vid-pop{position:fixed;inset:0;z-index:50;background:rgba(10,10,10,.82);display:flex;align-items:center;justify-content:center;padding:16px}
+.vid-box{position:relative;width:min(1100px,100%);aspect-ratio:16/9}
+.vid-box iframe{width:100%;height:100%;border:0;border-radius:12px;background:#000}
+.vid-x{position:absolute;top:-46px;right:-4px;width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;font-size:26px;cursor:pointer}
+@media(max-width:860px){
+  .help-apps,.help-vid{float:none;width:auto;max-width:480px;margin:0 0 16px}
+  .help-body{flex-direction:column;gap:0}
+  .help-toc{position:static;width:auto;flex-direction:row;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+  .help-toc a{border:1px solid var(--line);border-radius:999px;padding:4px 11px}
+  .topbar nav{display:none}
+}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="topbar-in">
+  <a class="brand" href="./"><img src="screenshots/appicon.png" alt="">SideStep</a>
+  <nav>
+    <a href="https://github.com/johnbuckman/SideStep/releases">Download</a>
+    <a href="https://johnbuckman.github.io/SideStepWizard/">Wizard</a>
+    <a href="https://github.com/johnbuckman/SideStep">GitHub</a>
+  </nav>
+</div></header>
+
+<main class="wrap">
+  <aside class="help-apps">
+    <div class="help-apps-title">📦 Get SideStep</div>
+    <div class="help-apps-sub">Free and open source. For Macs running macOS 14 (Sonoma) or newer, Apple silicon or Intel.</div>
+    <div class="help-apps-btns">
+      <a class="btn" href="https://github.com/johnbuckman/SideStep/releases"> Download for Mac</a>
+      <a class="btn ghost" href="https://johnbuckman.github.io/SideStepWizard/">Make an installer</a>
+    </div>
+    <a class="help-apps-more" href="#getting-started">Install instructions →</a>
+  </aside>
+  <button type="button" class="help-vid" aria-label="Play the SideStep tour (3 minutes)"><img src="screenshots/video-tour.jpg" alt="Watch the 3-minute tour" width="1280" height="720"></button>
+
+  <div class="page-head"><div><h1>SideStep Help</h1><div class="sub">Everything you can do with SideStep</div></div></div>
+  <p class="help-lead">SideStep is a small Mac menu-bar app that puts iOS apps on your own iPhone or iPad using your own Apple ID (a free one works), with no App Store, no jailbreak and no special hardware. Then it keeps them signed and up to date by itself, over a cable or over Wi-Fi, so they behave like normal, permanently installed apps.</p>
+
+  <div class="help-body">
+    <nav class="help-toc">
+      <a href="#getting-started">Getting started</a>
+      <a href="#accounts">Apple accounts</a>
+      <a href="#device">Getting your device ready</a>
+      <a href="#installing">Installing an app</a>
+      <a href="#finding">Finding apps</a>
+      <a href="#your-apps">Your apps</a>
+      <a href="#updates">Staying signed & up to date</a>
+      <a href="#on-device">On your iPhone or iPad</a>
+      <a href="#install-more">Install more apps from the device</a>
+      <a href="#installers">One-click installers</a>
+      <a href="#expired">If an app stops opening</a>
+      <a href="#piracy">Not for piracy</a>
+      <a href="#settings">Settings</a>
+      <a href="#troubleshooting">Troubleshooting</a>
+      <a href="#how">How it works</a>
+    </nav>
+
+    <div class="help-content">
+
+      <section class="help-sec" id="getting-started">
+        <h2>🚀 Getting started</h2>
+        <p>Download SideStep, open the .dmg and drag SideStep to Applications. It's signed with an Apple Developer ID and notarized by Apple, so it opens like any other app.</p>
+        <ul>
+          <li><b>It lives in the menu bar</b> — a small box icon at the top of your screen, with no Dock icon. Click it to open the SideStep panel.</li>
+          <li><b>It starts when you log in</b> — SideStep turns this on the first time it runs, because it can only keep your apps signed while it's running. You can switch it off in Settings.</li>
+          <li><b>What you need</b> — a Mac with macOS 14 or newer, an Apple ID, and an iPhone or iPad with a cable for the first install.</li>
+        </ul>
+        <img class="help-shot narrow" src="screenshots/panel-2026.jpg" alt="The SideStep panel">
+        <p class="help-shot-cap">The SideStep panel: your Apple accounts, the apps on each device, and ways to install more.</p>
+        <p>The first time, it takes about five minutes:</p>
+        <ol>
+          <li>Sign in with an Apple ID (<a href="#accounts">Apple accounts</a>).</li>
+          <li>Plug in your iPhone or iPad and get it ready (<a href="#device">Getting your device ready</a>).</li>
+          <li>Pick an app and install it (<a href="#finding">Finding apps</a>).</li>
+          <li>On the device, trust your Apple ID once, then open the app.</li>
+        </ol>
+        <p class="help-note">If an app developer sent you a “… installer” file, open that instead: it installs SideStep and walks you through every step (<a href="#installers">One-click installers</a>).</p>
+      </section>
+
+      <section class="help-sec" id="accounts">
+        <h2>👤 Apple accounts</h2>
+        <p>SideStep signs apps with your own Apple ID, the same way Xcode does for developers. There's no SideStep account and no SideStep server: your login goes only to Apple.</p>
+        <ul>
+          <li><b>Sign in</b> — click <b>Add account</b> in the panel, enter your Apple ID and password, then the two-factor code Apple sends you.</li>
+          <li><b>No other Apple device?</b> — tick “Text me the code” to get the code by text message instead.</li>
+          <li><b>Free or paid</b> — a free Apple ID works. Apps signed with it last <b>7 days</b> (SideStep renews them for you) and you can have <b>3 apps</b> per device at once; the “slots” count shows how many you've used. A paid Apple Developer account ($99 a year) signs apps for <b>1 year</b> with no app limit.</li>
+          <li><b>More than one account</b> — add several Apple IDs to get more free slots. When you install, SideStep asks which account to use, and lists first the one already used for that app.</li>
+          <li><b>Teams</b> — if your Apple ID belongs to more than one developer team, pick one from the <b>Team</b> menu under the account. Each team shows how long its apps last.</li>
+          <li><b>Your password stays on your Mac</b> — it's kept in the macOS Keychain so SideStep can sign in again by itself when Apple's session runs out. You'll only be asked again if Apple wants a new code.</li>
+          <li><b>Remove an account</b> — the person-minus button next to the account.</li>
+        </ul>
+        <p class="help-note">Use each Apple ID on one Mac only. If another Mac on your network already runs SideStep with the same Apple ID, SideStep says so and won't sign in, so two Macs never fight over the same apps.</p>
+      </section>
+
+      <section class="help-sec" id="device">
+        <h2>📱 Getting your device ready</h2>
+        <p>The first install for each iPhone or iPad needs a cable and a few one-time taps on the device.</p>
+        <ul>
+          <li><b>Trust this computer</b> — plug the device into your Mac, unlock it and tap <b>Trust</b> when it asks.</li>
+          <li><b>Developer Mode</b> — iOS 16 and later only run apps like these with Developer Mode on. If it's off, SideStep switches it on for you where it can and opens a short guide: Settings ▸ Privacy & Security ▸ Developer Mode, switch it on, let the device restart, then tap <b>Turn On</b>. Then install again. Older devices don't need it, and SideStep says so.</li>
+          <li><b>Trust your Apple ID</b> — after the first app installs, open Settings ▸ General ▸ VPN & Device Management, tap your Apple ID, then <b>Trust</b>. You do this once per Apple ID: every later app from the same account is trusted automatically.</li>
+          <li><b>Wi-Fi from then on</b> — during the first cable install SideStep also switches on the device's Wi-Fi connection to your Mac, so later installs and updates can happen without a cable while the device is unlocked and on the same network.</li>
+        </ul>
+        <div class="shots">
+          <figure><img src="screenshots/devmode-find.png" alt=""><figcaption>Settings ▸ Privacy & Security ▸ Developer Mode.</figcaption></figure>
+          <figure><img src="screenshots/devmode-on.png" alt=""><figcaption>Switch it on; the device restarts once.</figcaption></figure>
+        </div>
+        <div class="shots">
+          <figure><img src="screenshots/trust-1-open.png" alt=""><figcaption>VPN & Device Management: tap your Apple ID…</figcaption></figure>
+          <figure><img src="screenshots/trust-2-tap-trust.png" alt=""><figcaption>…tap Trust…</figcaption></figure>
+          <figure><img src="screenshots/trust-3-allow.png" alt=""><figcaption>…and Allow.</figcaption></figure>
+          <figure><img src="screenshots/trust-4-done.png" alt=""><figcaption>It now shows as Verified.</figcaption></figure>
+        </div>
+      </section>
+
+      <section class="help-sec" id="installing">
+        <h2>⬇️ Installing an app</h2>
+        <p>However you choose an app (see <a href="#finding">Finding apps</a>), the install goes the same way.</p>
+        <ul>
+          <li><b>Choose the device</b> — SideStep asks “Do you want to install …?” and lists every device it can reach, marked <b>USB</b> or <b>Wi-Fi</b>, and whether Developer Mode is off. It asks even when there's only one, so nothing installs by surprise.</li>
+          <li><b>Watch it go</b> — a window shows each step: downloading (with size and time left), signing, copying to the device and installing. <b>Hide</b> tucks it away; the install carries on.</li>
+          <li><b>Done</b> — the app appears on the Home Screen and in the SideStep panel under the Apple ID that signed it. The first time for each Apple ID, SideStep reminds you to trust it on the device.</li>
+        </ul>
+        <p class="help-note">If Apple won't register another device on your Apple ID (free accounts have a yearly limit), SideStep offers to use one of your other Apple IDs instead.</p>
+      </section>
+
+      <section class="help-sec" id="finding">
+        <h2>🔎 Finding apps</h2>
+        <p>The <b>Install</b> section of the panel has six ways to choose an app.</p>
+        <ul>
+          <li><b>Search AltStore</b> — browse and search a catalog of legitimate sideloadable apps gathered from curated AltStore sources, starting with SideStep's own. Type to filter, click a name for more about it, click <b>Install</b>. Under <b>Sources</b> you can add another source's address or remove one.</li>
+          <li><b>Install from GitHub</b> — type a repository as <code>owner/name</code>, or paste its address. SideStep installs the newest .ipa from its Releases and keeps following new releases. Type just a username to see all of that person's apps.</li>
+          <li><b>Search GitHub</b> — search GitHub by app name or keywords. It's best-effort, because GitHub can't search inside release files, so installing by <code>owner/name</code> is more reliable when you know it.</li>
+          <li><b>Install from .ipa</b> — choose an .ipa file (or .app) on your Mac. You can also just double-click an .ipa in Finder.</li>
+          <li><b>Install from AltStore repo</b> — enter the address of any AltStore-format source to list its apps in the panel, then install one.</li>
+          <li><b>Install from .json</b> — open a source file saved on your Mac; if it holds one app, it installs straight away.</li>
+        </ul>
+        <img class="help-shot" src="screenshots/altstore-search-2026.jpg" alt="Search AltStore">
+        <p class="help-shot-cap">Search AltStore: every app from the curated sources, filtered as you type.</p>
+        <h3>A faster GitHub search</h3>
+        <p>Without a sign-in, GitHub allows 60 requests an hour, and a wide search can use them up. SideStep tells you when that happens and offers <b>Add a GitHub token…</b>: create a free read-only token on GitHub (the button opens the page) and paste it in. That raises the limit to 5,000 an hour. The token stays in your Keychain; change or remove it in <a href="#settings">Settings</a>.</p>
+      </section>
+
+      <section class="help-sec" id="your-apps">
+        <h2>🗂️ Your apps</h2>
+        <p>Every app you've installed is listed in the panel under the Apple ID that signed it, with its icon, version, and each device it's on.</p>
+        <ul>
+          <li><b>Keeps up to date</b> (green) — apps from GitHub or a web source. SideStep installs their new versions for you. Click the words to check for a new version now and update every device that's within reach; a window reports each device's result.</li>
+          <li><b>One-time install</b> (grey) — apps from a file on your Mac. SideStep keeps them signed, but can't know about new versions.</li>
+          <li><b>GitHub link</b> — for GitHub apps, the <code>owner/repo</code> next to the name opens the project page.</li>
+          <li><b>Expiry</b> — each device shows how long until the app's signature runs out (“expires in 5 days”), or <b>EXPIRED</b> in red.</li>
+          <li><b>Refresh</b> (circular arrow) — re-sign and reinstall the app on that device now. Any other expired apps on the same device are refreshed at the same time.</li>
+          <li><b>Remove</b> (minus) — uninstall the app from that device and free its slot on your Apple ID.</li>
+        </ul>
+      </section>
+
+      <section class="help-sec" id="updates">
+        <h2>🔄 Staying signed & up to date</h2>
+        <p>You don't have to do anything: as long as SideStep is running on your Mac, it renews your apps before they expire and installs new versions.</p>
+        <ul>
+          <li><b>When you plug in</b> — connecting a device (or it appearing on Wi-Fi) makes SideStep check its apps.</li>
+          <li><b>Before expiry</b> — once an app is 70% of the way through its signing period, SideStep renews it as soon as the device is reachable, checking every few minutes. Apps that are still fresh are left alone.</li>
+          <li><b>New versions</b> — once a day SideStep looks for new releases of your GitHub apps and new versions in the catalog, and installs them on any device within reach.</li>
+          <li><b>Over Wi-Fi, from the app itself</b> — every app SideStep installs carries a small helper (the “beacon”). When you open the app, or every 10 minutes while you use it, it checks whether it's due for renewal; if it is, it asks your Mac, which signs a fresh copy and sends it over Wi-Fi. The device must be unlocked and on the same network as your Mac.</li>
+          <li><b>“SideStep is updating …”</b> — a banner at the top of the app tells you when an update is arriving. The new version takes over the next time you fully close the app and open it again.</li>
+          <li><b>A day's warning</b> — if an app is about to expire because SideStep couldn't reach it, the device shows an “Update needed soon” notification. Open the app near your Mac (or plug it in) and it renews itself.</li>
+          <li><b>Never backwards</b> — SideStep won't replace an app with an older version, and once a device's iOS turns out to be too old for an app, it stops trying to install it there.</li>
+        </ul>
+        <p class="help-note">Your Mac must be awake and running SideStep for any of this to happen. If it's asleep or away, the apps simply wait and try again next time.</p>
+      </section>
+
+      <section class="help-sec" id="on-device">
+        <h2>📲 On your iPhone or iPad</h2>
+        <h3>Permissions</h3>
+        <p>The first time you open an app installed by SideStep, iOS asks two questions on SideStep's behalf. Both are optional, but the app works best with both allowed:</p>
+        <ul>
+          <li><b>Notifications</b> — so SideStep can warn you before an app expires.</li>
+          <li><b>Local Network</b> — so the app can find your Mac over Wi-Fi to get updates.</li>
+        </ul>
+        <p>If you said no, the app shows a short card explaining what you'll miss, with <b>Try Again</b> (opens the app's Settings so you can switch it on) or <b>I understand</b>.</p>
+        <h3>The Updater panel</h3>
+        <p>Every app SideStep installs has a hidden status panel. To open it, <b>hold two fingers in two different corners of the screen</b> (for example top-left and top-right) <b>for about 1.5 seconds</b>. It's awkward on purpose, so you won't open it by accident.</p>
+        <img class="help-shot phone" src="screenshots/phone-updater-2026.jpg" alt="The Updater panel">
+        <p class="help-shot-cap">The Updater panel: who installed the app, when it was renewed, and when it expires.</p>
+        <ul>
+          <li><b>What it shows</b> — the app and its version; where it came from and whether it keeps itself up to date; which Mac and Apple ID installed it; when it was last renewed and when it expires; the last check and its result; and a week of recent activity.</li>
+          <li><b>Update pending</b> — if a new version has arrived but hasn't taken over yet, a note at the top says so.</li>
+          <li><b>Update app now</b> — asks your Mac for a fresh copy straight away, with live progress (“Signing the app”, “Sending it to your device”…) and time left. When it finishes, the app closes so the new version can take over: open it again from the Home Screen.</li>
+          <li><b>Install more apps…</b> — see the next section.</li>
+        </ul>
+      </section>
+
+      <section class="help-sec" id="install-more">
+        <h2>➕ Install more apps from the device</h2>
+        <p>Once one app from SideStep is on your iPhone or iPad, you can install others from the device itself, over Wi-Fi, without touching the Mac. Open the Updater panel and tap <b>Install more apps…</b>:</p>
+        <ul>
+          <li><b>Apps on your other devices</b> — anything SideStep has installed on your other iPhones and iPads, ready to add to this one.</li>
+          <li><b>Search AltStore</b> — search the same catalog as on the Mac.</li>
+          <li><b>Install from GitHub</b> — type <code>owner/name</code>, or a username to see that person's apps.</li>
+        </ul>
+        <p>Tap an app and your Mac signs and sends it; the device shows each step and tells you when it's on your Home Screen. If your Apple ID has no free slots, SideStep tries your next Apple ID.</p>
+        <p class="help-note">This needs SideStep running on your Mac, on the same Wi-Fi, with the device unlocked.</p>
+      </section>
+
+      <section class="help-sec" id="installers">
+        <h2>🧙 One-click installers (for app developers)</h2>
+        <p><b>SideStep Wizard</b> turns your app's GitHub repository into a single file you can give anyone. They open it, and it installs SideStep and your app for them, with no Xcode and no developer account on their side.</p>
+        <ol>
+          <li>Download SideStep Wizard and open it.</li>
+          <li>Enter your GitHub repository (the one whose Releases hold your .ipa) and your app's name, then click <b>Create Installer</b>. A “<i>App</i> installer” file and a .zip of it land on your Desktop.</li>
+          <li>Say where you'll host the .zip (it suggests your repo's Releases), then click <b>Test the Installer</b> to try it.</li>
+          <li>Copy the ready-made <b>website button</b>. On a Mac it opens SideStep straight to your app, or downloads your installer if SideStep isn't there yet; on a phone it explains that a Mac is needed.</li>
+        </ol>
+        <p>The person who opens the installer is guided step by step: it downloads the latest SideStep, waits for them to plug in their device and tap Trust, switches on Developer Mode, then hands over to SideStep to install your app. It always fetches the newest SideStep, so nobody gets a stale copy.</p>
+        <p class="help-note">Links of the form <code>sidestep://install?repo=owner/name</code> open SideStep on a confirmation page for that app; nothing installs until the person clicks Install.</p>
+        <p class="help-open"><a href="https://johnbuckman.github.io/SideStepWizard/">Get SideStep Wizard →</a></p>
+      </section>
+
+      <section class="help-sec" id="expired">
+        <h2>🩹 If an app stops opening</h2>
+        <h3>It expired</h3>
+        <p>If a device was off or away from your Mac for longer than the signing period (7 days on a free Apple ID), its apps' signatures lapse and they won't open. Getting them back takes a minute:</p>
+        <ol>
+          <li>Turn the device on, unlock it, and put it on the same Wi-Fi as your Mac (or plug it in).</li>
+          <li>In SideStep, click <b>Refresh</b> next to the app on that device.</li>
+        </ol>
+        <p>Nothing needs deleting or setting up again, and refreshing one expired app refreshes the device's other expired apps too.</p>
+        <h3>Developer Mode was switched off</h3>
+        <p>Apps from SideStep only open while Developer Mode is on. Switch it back on (Settings ▸ Privacy & Security ▸ Developer Mode), let the device restart, then trust your Apple ID again in Settings ▸ General ▸ VPN & Device Management.</p>
+      </section>
+
+      <section class="help-sec" id="piracy">
+        <h2>🛡️ Not for piracy</h2>
+        <p>SideStep is for open-source and self-published apps: the kind the App Store won't carry. It works to stay that way:</p>
+        <ul>
+          <li><b>A curated catalog</b> — its sources list only legitimate apps, added by public pull request after review.</li>
+          <li><b>Pirate sources refused</b> — a public block list of sources that hand out cracked apps; SideStep won't add them, from the catalog or from an address you type.</li>
+          <li><b>Pirated builds refused</b> — apps are checked against known pirated copies before installing.</li>
+          <li><b>Paid apps questioned</b> — if an app looks like a paid App Store title, SideStep asks you to confirm you have the right to it before going on.</li>
+        </ul>
+      </section>
+
+      <section class="help-sec" id="settings">
+        <h2>⚙️ Settings</h2>
+        <p>Open <b>Settings</b> at the bottom of the panel:</p>
+        <ul>
+          <li><b>Launch SideStep at login</b> — leave this on, so your apps keep being renewed.</li>
+          <li><b>Refresh all apps now</b> — renew every app that's due, on every device within reach.</li>
+          <li><b>Check apps for updates now</b> — look for new versions of your GitHub and catalog apps now, instead of waiting for the daily check.</li>
+          <li><b>Check for SideStep Update now</b> — SideStep updates itself: it downloads the new version, checks Apple's notarization and the developer signature, and relaunches. It also checks once a day by itself.</li>
+          <li><b>GitHub token</b> — add, change or remove the token that speeds up GitHub search.</li>
+          <li><b>Anisette server</b> — the service that supplies the device information Apple's sign-in requires. You only need to change it if sign-in fails and SideStep suggests it. The server never sees your Apple ID.</li>
+          <li><b>Show Debug Log…</b> — SideStep's live activity, which you can copy or save to a file when reporting a problem.</li>
+        </ul>
+      </section>
+
+      <section class="help-sec" id="troubleshooting">
+        <h2>🧰 Troubleshooting</h2>
+        <ul>
+          <li><b>“No iOS device found”</b> — plug the device in and tap Trust, or unlock a device that's already set up for Wi-Fi.</li>
+          <li><b>Wi-Fi install failed</b> — unlock the device and check it's on the same network as your Mac. Plugging it in always works.</li>
+          <li><b>“Can't reach this device to update it”</b> — open the app on the device once so it checks in over Wi-Fi, or plug it in, then click Refresh again.</li>
+          <li><b>The app installed but won't open</b> — trust your Apple ID on the device (Settings ▸ General ▸ VPN & Device Management) and check Developer Mode is on.</li>
+          <li><b>Slots 3/3</b> — a free Apple ID can only have three apps on a device. Remove one, or add another Apple ID.</li>
+          <li><b>“Apple won't register …”</b> — your Apple ID has reached Apple's yearly device limit. Use or add another Apple ID.</li>
+          <li><b>Sign-in problems</b> — if SideStep says it couldn't get Apple's sign-in data, try again later or set another anisette server in Settings. If it couldn't sign in by itself, open the panel and sign in again; Apple may just want a new code.</li>
+          <li><b>“No reply yet — is SideStep running on your Mac?”</b> (on the device) — wake the Mac, make sure SideStep is in its menu bar, and that both are on the same Wi-Fi.</li>
+        </ul>
+        <p class="help-note">The full activity log is in <b>Settings ▸ Show Debug Log…</b> and in <code>~/Library/Logs/SideStep.log</code> (the last 48 hours). Report problems on <a href="https://github.com/johnbuckman/SideStep/issues">GitHub</a>.</p>
+      </section>
+
+      <section class="help-sec" id="how">
+        <h2>🔧 How it works</h2>
+        <ul>
+          <li><b>Apple's own signing</b> — Apple lets anyone sign apps for their own devices with an Apple ID. SideStep gets a normal development certificate and profile, exactly as Xcode does, and signs the app with them. It doesn't jailbreak, patch iOS, turn off security or remove any copy protection.</li>
+          <li><b>Apple's own install protocol</b> — it talks to the device the way Apple's tools do, through the open-source libimobiledevice.</li>
+          <li><b>Nothing central</b> — no SideStep server and no shared certificate: each app is signed by your Apple ID for your device, on your Mac.</li>
+          <li><b>Why it exists</b> — John Buckman makes espresso machines whose app is written in a language the App Store won't accept. SideStep is how it reaches customers' iPads and stays updated without a weekly cable. It works just as well for any app you want on your own device.</li>
+        </ul>
+        <p>SideStep is open source under the GNU Affero General Public License v3.0. It's built on AltSign from the AltStore and SideStore projects (© Riley Testut and contributors) and the zsign signer by zhlynn (MIT).</p>
+        <p class="help-open"><a href="https://github.com/johnbuckman/SideStep">Source code, releases and issues on GitHub →</a></p>
+      </section>
+
+      <p class="foot">SideStep — install and keep iOS apps on your own device. <a href="./">Home</a> · <a href="https://github.com/johnbuckman/SideStep/releases">Releases</a> · <a href="https://github.com/johnbuckman/SideStep">GitHub</a></p>
+    </div>
+  </div>
+</main>
+<script>
+// the tour plays in a pop-up (privacy-enhanced youtube-nocookie player); Esc or the x closes it
+document.querySelector(".help-vid").addEventListener("click", function () {
+  var o = document.createElement("div"); o.className = "vid-pop";
+  o.innerHTML = '<div class="vid-box"><button type="button" class="vid-x" aria-label="Close">&times;</button>' +
+    '<iframe src="https://www.youtube-nocookie.com/embed/MM5PfgjOk8E?autoplay=1&rel=0" title="SideStep: a 3-minute tour" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>';
+  function close() { o.remove(); removeEventListener("keydown", key); }
+  function key(e) { if (e.key === "Escape") close(); }
+  o.addEventListener("click", function (e) { if (e.target === o || e.target.closest(".vid-x")) close(); });
+  addEventListener("keydown", key); document.body.appendChild(o);
+});
+</script>
+</body>
+</html>
