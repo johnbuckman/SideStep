@@ -17,6 +17,7 @@
 // corners for 1.5s) opens a vitals panel + an "Update app now" button.
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 #import <UIKit/UIGestureRecognizerSubclass.h>
 #import <UserNotifications/UserNotifications.h>
 #import <BackgroundTasks/BackgroundTasks.h>
@@ -304,14 +305,18 @@ static void rescheduleExpiryNotification(void) {
     NSTimeInterval untilExpiry = expires.timeIntervalSinceNow;
     NSTimeInterval fireIn = untilExpiry - 86400;   // one day before expiry
     if (fireIn < 5) fireIn = 5;
-    int days = (int)ceil(untilExpiry / 86400.0);
+    // The text is fixed when the notification is scheduled but read when it fires, so
+    // describe the time left AT FIRE TIME (it used to say "6 days" a day before expiry).
+    NSTimeInterval leftThen = untilExpiry - fireIn;
+    NSString *when = leftThen <= 0 ? @"has expired"
+        : leftThen <= 86400 + 60 ? (leftThen > 3600 ? @"expires within a day" : @"expires within the hour")
+        : [NSString stringWithFormat:@"expires in %d days", (int)ceil(leftThen / 86400.0)];
     UNMutableNotificationContent *ct = [UNMutableNotificationContent new];
     ct.title = @"Update needed soon";
     ct.body = [NSString stringWithFormat:
-        @"%@ expires in %d day%@. Open it now (on Wi-Fi near your Mac) so it can refresh "
+        @"%@ %@. Open it now (on Wi-Fi near your Mac) so it can refresh "
         @"automatically — otherwise it will need a USB reinstall.",
-        NSBundle.mainBundle.infoDictionary[@"CFBundleDisplayName"] ?: @"This app",
-        days, days == 1 ? @"" : @"s"];
+        NSBundle.mainBundle.infoDictionary[@"CFBundleDisplayName"] ?: @"This app", when];
     ct.sound = UNNotificationSound.defaultSound;
     UNTimeIntervalNotificationTrigger *tr = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:fireIn repeats:NO];
     [c addNotificationRequest:[UNNotificationRequest requestWithIdentifier:NOTIF_ID content:ct trigger:tr] withCompletionHandler:nil];
@@ -1063,6 +1068,17 @@ static void openAppSettings(void) {
     if (u) [UIApplication.sharedApplication openURL:u options:@{} completionHandler:nil];
 }
 
+// Runs a block on a control event. UIAction would do this, but it's iOS 14+ and the beacon
+// supports iOS 13, where -addAction: crashes; target/action works everywhere.
+@interface BeaconBlockTarget : NSObject
+@property(nonatomic, copy) void (^block)(void);
+- (void)fire;
+@end
+@implementation BeaconBlockTarget
+- (void)fire { if (self.block) self.block(); }
+@end
+static char kBlockTargetKey;
+
 static UIButton *nagButton(NSString *title, BOOL primary, void (^handler)(void)) {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:title forState:UIControlStateNormal];
@@ -1070,8 +1086,9 @@ static UIButton *nagButton(NSString *title, BOOL primary, void (^handler)(void))
     b.backgroundColor = primary ? UIColor.systemBlueColor : [UIColor colorWithWhite:0.92 alpha:1];
     [b setTitleColor:primary ? UIColor.whiteColor : [UIColor colorWithWhite:0.2 alpha:1] forState:UIControlStateNormal];
     b.layer.cornerRadius = 12;
-    [b addAction:[UIAction actionWithHandler:^(__kindof UIAction *a) { if (handler) handler(); }]
-        forControlEvents:UIControlEventTouchUpInside];
+    BeaconBlockTarget *t = [BeaconBlockTarget new]; t.block = handler;
+    objc_setAssociatedObject(b, &kBlockTargetKey, t, OBJC_ASSOCIATION_RETAIN_NONATOMIC);   // the button keeps it alive
+    [b addTarget:t action:@selector(fire) forControlEvents:UIControlEventTouchUpInside];
     return b;
 }
 
@@ -1255,7 +1272,7 @@ static void requestNotificationsThenLocalNet(void) {
                          : st == UNAuthorizationStatusDenied        ? @"denied"
                          : st == UNAuthorizationStatusAuthorized    ? @"authorized"
                          : st == UNAuthorizationStatusProvisional   ? @"provisional"
-                         : st == UNAuthorizationStatusEphemeral     ? @"ephemeral" : @"unknown";
+                         : st == 4 /* UNAuthorizationStatusEphemeral (iOS 14+ name) */ ? @"ephemeral" : @"unknown";
         beaconLog([NSString stringWithFormat:@"notif permission status = %@", stName]);
         if (st == UNAuthorizationStatusNotDetermined) {
             if ([NSUserDefaults.standardUserDefaults boolForKey:kNotifAsked]) {

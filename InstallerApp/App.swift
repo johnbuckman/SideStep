@@ -12,7 +12,7 @@ import Foundation
 import CoreImage
 
 // In-app refresh scheduler — replaces the external LaunchAgents. Runs while the
-// app is alive in the menu bar: refreshes on device-connect and on a ~2h timer
+// app is alive in the menu bar: refreshes on device-connect, near expiry, and a daily update sweep
 // (refreshAll is itself expiry-aware + single-flight-locked, so this is cheap).
 final class RefreshDaemon {
     static let shared = RefreshDaemon()
@@ -459,7 +459,14 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
         if let json = UTType(filenameExtension: "json") { panel.allowedContentTypes = [json] }
         panel.prompt = "Open"
-        guard panel.runModal() == .OK, let u = panel.url else { return }
+        // Same greying fix as pickIPA: an accessory (menu-bar) app can't make the open
+        // panel key, so the file list renders disabled; be a regular app while it's up.
+        let prevPolicy = NSApp.activationPolicy()
+        if prevPolicy != .regular { NSApp.setActivationPolicy(.regular) }
+        NSApp.activate(ignoringOtherApps: true)
+        let resp = panel.runModal()
+        if prevPolicy != .regular { NSApp.setActivationPolicy(prevPolicy) }
+        guard resp == .OK, let u = panel.url else { return }
         do {
             let apps = try Sideloader.loadSourceFile(u.path)
             sourceApps = apps
@@ -1690,7 +1697,7 @@ struct ContentView: View {
                     Button(m.githubHasToken ? "GitHub token (saved) — change…" : "Add a GitHub token (faster search)…") { m.promptGitHubToken() }
                     Button("Anisette server: \(m.anisetteServerHost) — change…") { m.promptAnisetteServer() }
                     Button("Show Debug Log…") { DebugWindow.show() }
-                    Text("SideStep keeps apps signed while it runs in the menu bar — it re-signs automatically when you plug in a device and every couple of hours. No separate background program is needed.")
+                    Text("SideStep keeps apps signed while it runs in the menu bar — it renews them when you plug in a device and as they near expiry, and installs new versions once a day. No separate background program is needed.")
                         .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }.padding(.top, 2)
             } label: {

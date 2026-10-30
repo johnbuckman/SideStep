@@ -97,6 +97,11 @@ public enum BeaconInjector {
         var ids = (d["BGTaskSchedulerPermittedIdentifiers"] as? [String]) ?? []
         if !ids.contains(bgTaskID) { ids.append(bgTaskID) }
         d["BGTaskSchedulerPermittedIdentifiers"] = ids
+        // The beacon schedules a BGAppRefreshTask, which iOS only runs for apps that declare
+        // the "fetch" background mode — without it the background check never fired.
+        var modes = (d["UIBackgroundModes"] as? [String]) ?? []
+        if !modes.contains("fetch") { modes.append("fetch") }
+        d["UIBackgroundModes"] = modes
         d.write(to: url, atomically: true)
     }
 
