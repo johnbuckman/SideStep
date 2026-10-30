@@ -747,8 +747,16 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
         }
     };
 
+    // Size the card to its widest log line so iPads don't wrap the activity log;
+    // never narrower than 560 and never wider than the screen minus margins (iPhone: W - 48).
     CGFloat W = w.bounds.size.width, H = w.bounds.size.height;
-    CGFloat cardW = MIN(560, W - 48), cardH = MIN(H - 120, 620);
+    UIFont *mono = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
+    NSString *vt = vitalsText();
+    CGFloat widest = 0;
+    for (NSString *line in [vt componentsSeparatedByString:@"\n"])
+        widest = MAX(widest, ceil([line sizeWithAttributes:@{NSFontAttributeName: mono}].width));
+    CGFloat maxW = W >= 700 ? W - 96 : W - 48;
+    CGFloat cardW = MIN(MAX(560, widest + 56), maxW), cardH = MIN(H - 120, 620);   // 56 = 2×20 scroll inset + 2×4 label inset + 8 slack
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake((W - cardW)/2, (H - cardH)/2, cardW, cardH)];
     card.backgroundColor = UIColor.whiteColor;
     card.layer.cornerRadius = 20;
@@ -776,8 +784,8 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
     UIScrollView *sv = [[UIScrollView alloc] initWithFrame:CGRectMake(20, 92, cardW - 40, rowMore - 104)];
     UILabel *lbl = [UILabel new];
     lbl.numberOfLines = 0; lbl.textColor = [UIColor colorWithWhite:0.15 alpha:1];
-    lbl.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
-    lbl.text = vitalsText(); lbl.frame = CGRectMake(4, 4, sv.bounds.size.width - 8, 10); [lbl sizeToFit];
+    lbl.font = mono;
+    lbl.text = vt; lbl.frame = CGRectMake(4, 4, sv.bounds.size.width - 8, 10); [lbl sizeToFit];
     sv.contentSize = CGSizeMake(sv.bounds.size.width, lbl.frame.size.height + 8);
     [sv addSubview:lbl]; [card addSubview:sv]; self.label = lbl;
 
