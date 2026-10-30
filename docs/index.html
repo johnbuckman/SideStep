@@ -43,7 +43,7 @@ img{max-width:100%;height:auto;display:block}
 .top nav a{color:rgba(255,255,255,.85)}
 
 /* hero */
-.hero{background:radial-gradient(120% 100% at 25% 15%,var(--hero1) 0%,var(--hero2) 55%,var(--hero3) 100%);color:#fff;padding:110px 0 150px;position:relative;overflow:hidden}
+.hero{background:radial-gradient(120% 100% at 25% 15%,var(--hero1) 0%,var(--hero2) 55%,var(--hero3) 100%);color:#fff;padding:110px 0 80px;position:relative;overflow:hidden}
 .hero .wrap{display:grid;grid-template-columns:1.05fr 1fr;gap:48px;align-items:center}
 .hero-icon{width:96px;height:96px;filter:drop-shadow(0 12px 24px rgba(0,0,0,.35))}
 .hero h1{font-size:64px;line-height:1.05;letter-spacing:-.02em;margin:18px 0 14px}
@@ -54,10 +54,17 @@ img{max-width:100%;height:auto;display:block}
 .btn:hover{text-decoration:none;filter:brightness(1.08)}
 .btn.ghost{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3)}
 .fine{margin-top:16px;font-size:14px;color:rgba(255,255,255,.65)}
-.hero-shots{position:relative;height:440px}
+.hero-shots{position:relative;height:500px}
 .hero-shots .mac{position:absolute;right:0;top:0;width:330px;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.45);overflow:hidden;background:#fff}
 .hero-shots .phone{position:absolute;left:10px;top:70px;width:200px;border-radius:32px;background:#111;padding:8px;box-shadow:0 24px 60px rgba(0,0,0,.5)}
 .hero-shots .phone img{border-radius:25px}
+
+.hero-right{display:flex;flex-direction:column;align-items:flex-end;gap:18px}
+.hero-right .hero-shots{width:100%}
+.watch{display:inline-flex;align-items:center;gap:10px;padding:8px 16px 8px 8px;border-radius:999px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.22);color:#fff;font-size:15px;font-weight:600}
+.watch:hover{text-decoration:none;background:rgba(0,0,0,.5)}
+.watch .play{width:30px;height:30px;border-radius:50%;background:#e62117;display:flex;align-items:center;justify-content:center;padding-left:2px}
+.watch .len{font-weight:500;color:rgba(255,255,255,.65);white-space:nowrap}
 
 /* sections */
 section{padding:70px 0}
@@ -68,9 +75,6 @@ h2{font-size:36px;letter-spacing:-.015em;line-height:1.15;margin:0 0 12px}
 p{color:var(--ink-soft)}
 b,strong{color:var(--ink)}
 
-.video{position:relative;aspect-ratio:16/9;border-radius:16px;overflow:hidden;box-shadow:var(--shadow);background:#000;margin-top:-90px;z-index:2}
-.video iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
-.video-cap{text-align:center;color:var(--muted);font-size:15px;margin:14px 0 0}
 
 .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px;box-shadow:var(--shadow)}
@@ -118,13 +122,14 @@ code{font:14px ui-monospace,Menlo,monospace;background:var(--panel);border:1px s
   .hero .wrap,.split,.split.rev{grid-template-columns:1fr}
   .split.rev .txt{order:0}
   .hero-shots{display:none}
+  .hero-right{align-items:flex-start}
   .hero h1{font-size:48px}
   .cards{grid-template-columns:1fr 1fr}
   .steps{grid-template-columns:1fr}
   footer .cols{grid-template-columns:1fr}
   .top nav a:not(.keep){display:none}
 }
-@media(max-width:560px){ .cards{grid-template-columns:1fr} .phones .phone{width:46%} }
+@media(max-width:560px){ .watch .len{display:none} .cards{grid-template-columns:1fr} .phones .phone{width:46%} }
 </style>
 </head>
 <body>
@@ -132,7 +137,7 @@ code{font:14px ui-monospace,Menlo,monospace;background:var(--panel);border:1px s
 <header class="top"><div class="wrap">
   <a class="brand" href="./"><img src="screenshots/appicon.png" alt="">SideStep</a>
   <nav>
-    <a href="#tour">Video</a>
+    <a href="https://youtu.be/MM5PfgjOk8E">Video</a>
     <a href="help.html" class="keep">Guide</a>
     <a href="https://johnbuckman.github.io/SideStepWizard/">Wizard</a>
     <a href="https://github.com/johnbuckman/SideStep">GitHub</a>
@@ -151,16 +156,14 @@ code{font:14px ui-monospace,Menlo,monospace;background:var(--panel);border:1px s
     </div>
     <div class="fine">macOS 14 or newer · Apple silicon and Intel · free and open source (AGPL-3.0)</div>
   </div>
-  <div class="hero-shots" aria-hidden="true">
-    <div class="mac"><img src="screenshots/panel-2026.jpg" alt=""></div>
-    <div class="phone"><img src="screenshots/phone-updater-2026.jpg" alt=""></div>
+  <div class="hero-right">
+    <div class="hero-shots" aria-hidden="true">
+      <div class="mac"><img src="screenshots/panel-2026.jpg" alt=""></div>
+      <div class="phone"><img src="screenshots/phone-updater-2026.jpg" alt=""></div>
+    </div>
+    <a class="watch" id="tour" href="https://youtu.be/MM5PfgjOk8E"><span class="play"><svg width="14" height="14" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="#fff"/></svg></span>Watch the explainer video on YouTube <span class="len">3 min</span></a>
   </div>
 </div></div>
-
-<section id="tour" style="padding-top:0"><div class="wrap">
-  <div class="video"><iframe src="https://www.youtube-nocookie.com/embed/MM5PfgjOk8E?rel=0" title="SideStep: a 3-minute tour" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen loading="lazy"></iframe></div>
-  <p class="video-cap">A 3-minute tour of SideStep. Everything in it is in <a href="help.html">the guide</a>.</p>
-</div></section>
 
 <section class="alt"><div class="wrap">
   <p class="kicker">What it's for</p>
