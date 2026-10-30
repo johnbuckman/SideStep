@@ -74,15 +74,13 @@ kbd{font:12px ui-monospace,Menlo,monospace;background:var(--panel);border:1px so
 code{font:13px ui-monospace,Menlo,monospace;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:0 4px}
 pre{font:13px/1.5 ui-monospace,Menlo,monospace;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-x:auto}
 .foot{margin-top:40px;font-size:13px;color:var(--muted)}
-.help-vid{display:block;width:300px;float:right;clear:right;margin:0 0 14px 24px;padding:0;border:1px solid var(--line-strong);border-radius:12px;overflow:hidden;background:var(--panel);cursor:pointer;box-shadow:var(--shadow)}
-.help-vid img{display:block;width:100%;height:auto}
-.help-vid:hover{box-shadow:0 10px 30px rgba(0,0,0,.18)}
-.vid-pop{position:fixed;inset:0;z-index:50;background:rgba(10,10,10,.82);display:flex;align-items:center;justify-content:center;padding:16px}
-.vid-box{position:relative;width:min(1100px,100%);aspect-ratio:16/9}
-.vid-box iframe{width:100%;height:100%;border:0;border-radius:12px;background:#000}
-.vid-x{position:absolute;top:-46px;right:-4px;width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;font-size:26px;cursor:pointer}
+.help-watch{float:right;clear:right;margin:0 0 14px 24px;display:inline-flex;align-items:center;gap:9px;padding:6px 14px 6px 6px;border-radius:999px;background:var(--panel);border:1px solid var(--line-strong);box-shadow:var(--shadow);color:var(--ink);font-size:14px;font-weight:600}
+.help-watch:hover{text-decoration:none;border-color:var(--muted)}
+.help-watch .play{width:26px;height:26px;border-radius:50%;background:#e62117;display:flex;align-items:center;justify-content:center;padding-left:2px}
+.help-watch .len{font-weight:500;color:var(--muted)}
 @media(max-width:860px){
-  .help-apps,.help-vid{float:none;width:auto;max-width:480px;margin:0 0 16px}
+  .help-apps{float:none;width:auto;margin:0 0 16px}
+  .help-watch{float:none;margin:0 0 16px}
   .help-body{flex-direction:column;gap:0}
   .help-toc{position:static;width:auto;flex-direction:row;flex-wrap:wrap;gap:6px;margin-bottom:6px}
   .help-toc a{border:1px solid var(--line);border-radius:999px;padding:4px 11px}
@@ -110,7 +108,7 @@ pre{font:13px/1.5 ui-monospace,Menlo,monospace;background:var(--panel);border:1p
     </div>
     <a class="help-apps-more" href="#getting-started">Install instructions →</a>
   </aside>
-  <button type="button" class="help-vid" aria-label="Play the SideStep tour (3 minutes)"><img src="screenshots/video-tour.jpg" alt="Watch the 3-minute tour" width="1280" height="720"></button>
+  <a class="help-watch" href="https://youtu.be/MM5PfgjOk8E"><span class="play"><svg width="12" height="12" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="#fff"/></svg></span>Watch the explainer video on YouTube <span class="len">3 min</span></a>
 
   <div class="page-head"><div><h1>SideStep Help</h1><div class="sub">Everything you can do with SideStep</div></div></div>
   <p class="help-lead">SideStep is a small Mac menu-bar app that puts iOS apps on your own iPhone or iPad using your own Apple ID (a free one works), with no App Store, no jailbreak and no special hardware. Then it keeps them signed and up to date by itself, over a cable or over Wi-Fi, so they behave like normal, permanently installed apps.</p>
@@ -364,17 +362,5 @@ pre{font:13px/1.5 ui-monospace,Menlo,monospace;background:var(--panel);border:1p
     </div>
   </div>
 </main>
-<script>
-// the tour plays in a pop-up (privacy-enhanced youtube-nocookie player); Esc or the x closes it
-document.querySelector(".help-vid").addEventListener("click", function () {
-  var o = document.createElement("div"); o.className = "vid-pop";
-  o.innerHTML = '<div class="vid-box"><button type="button" class="vid-x" aria-label="Close">&times;</button>' +
-    '<iframe src="https://www.youtube-nocookie.com/embed/MM5PfgjOk8E?autoplay=1&rel=0" title="SideStep: a 3-minute tour" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe></div>';
-  function close() { o.remove(); removeEventListener("keydown", key); }
-  function key(e) { if (e.key === "Escape") close(); }
-  o.addEventListener("click", function (e) { if (e.target === o || e.target.closest(".vid-x")) close(); });
-  addEventListener("keydown", key); document.body.appendChild(o);
-});
-</script>
 </body>
 </html>
