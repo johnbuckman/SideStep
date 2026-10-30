@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Talk to SideStep's Mac debug control channel (InstallerApp/DebugControl.swift).
+
+  regression/ssctl CMD [args…]        one command, prints the reply
+  regression/ssctl -                  read commands from stdin, one per line
+
+The token comes from $SIDESTEP_DEBUG_TOKEN or ~/Library/Application Support/SideStep/debug-token.
+Arguments containing spaces are quoted for you. `regression/ssctl HELP` lists the commands.
+"""
+import os, socket, sys
+
+def token():
+    t = os.environ.get("SIDESTEP_DEBUG_TOKEN", "")
+    if not t:
+        with open(os.path.expanduser("~/Library/Application Support/SideStep/debug-token")) as f:
+            t = f.read().strip()
+    return t
+
+def q(a):
+    return '"%s"' % a if (" " in a or a == "") else a
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        print(__doc__); return 2
+    lines = [l.strip() for l in sys.stdin if l.strip()] if args == ["-"] else [" ".join(q(a) for a in args)]
+    s = socket.create_connection(("127.0.0.1", 51238), timeout=float(os.environ.get("SSCTL_TIMEOUT", "60")))
+    f = s.makefile("rw", encoding="utf-8")
+    tok, bad = token(), 0
+    for l in lines:
+        f.write("%s %s\n" % (tok, l)); f.flush()
+        r = f.readline().rstrip("\n")
+        print(r)
+        bad |= r.startswith("ERR")
+    return 1 if bad else 0
+
+sys.exit(main())

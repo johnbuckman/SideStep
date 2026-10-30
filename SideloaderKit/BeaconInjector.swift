@@ -57,11 +57,12 @@ public enum BeaconInjector {
         ]
         // The on-device beacon debug/control channel (inbound port + outbound dial-out) is
         // OFF by default — release and GUI installs ship no listening port and no token. It's
-        // enabled ONLY when this build/install sets SIDESTEP_BEACON_TOKEN (the regression
-        // harness does; nothing else). Without the token key, the beacon's startControlConnection
-        // / startDebugListener both no-op. This is the build flag that keeps the debug surface
-        // out of normal installs.
-        if let debugToken = ProcessInfo.processInfo.environment["SIDESTEP_BEACON_TOKEN"], !debugToken.isEmpty {
+        // enabled ONLY when SIDESTEP_BEACON_TOKEN is set (the regression harness does) or the Mac
+        // has a debug-token file (docs/DEBUG-CONTROL.md: the Mac app's own control channel, which
+        // then relays commands to these apps). Without the token key, the beacon's
+        // startControlConnection / startDebugListener both no-op, so normal installs carry no
+        // debug surface.
+        if let debugToken = beaconDebugToken() {
             cfg["debug_port"] = 51237
             cfg["debug_connect_port"] = 51236
             cfg["debug_token"] = debugToken
@@ -72,6 +73,18 @@ public enum BeaconInjector {
         mergeInfoPlist(infoPlist)
         log("beacon: instrumented (mac \(macIP), interval \(updateInterval)s)")
         return true
+    }
+
+    /// SIDESTEP_BEACON_TOKEN, else the Mac's chmod-600 debug-token file, else nil.
+    private static func beaconDebugToken() -> String? {
+        if let t = ProcessInfo.processInfo.environment["SIDESTEP_BEACON_TOKEN"], !t.isEmpty { return t }
+        let f = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/SideStep/debug-token").path
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: f),
+              ((attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0o777) & 0o077 == 0,
+              let t = try? String(contentsOfFile: f, encoding: .utf8) else { return nil }
+        let tok = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        return tok.isEmpty ? nil : tok
     }
 
     // MARK: - Info.plist merge

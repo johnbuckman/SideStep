@@ -331,6 +331,15 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var altStoreNote = "Loading app catalog…"
     @Published var altStoreSources: [AltStoreCatalog.Source] = []
 
+    // Panel disclosure state. Lives here (not as view @State) so it survives the popover
+    // being rebuilt and so the debug control channel (DebugControl.swift) can drive it.
+    @Published var accountsExpanded = true
+    @Published var installExpanded = true
+    @Published var settingsExpanded = false
+    @Published var collapsedAccounts = Set<String>()   // ids stored when COLLAPSED (default expanded)
+    @Published var collapsedApps = Set<String>()
+    var didSeedCollapse = false   // one-time: start every app's device list collapsed
+
     // MARK: accounts
 
     func login() {
@@ -516,7 +525,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         let ordered = accounts.sorted { (prior.contains($0.appleID) ? 0 : 1) < (prior.contains($1.appleID) ? 0 : 1) }
         let a = NSAlert(); a.messageText = "Which Apple account?"
         for acc in ordered {
-            a.addButton(withTitle: prior.contains(acc.appleID) ? "\(acc.displayName)  (previously used for this app)" : acc.displayName)
+            a.addButton(withTitle: Demo.s(prior.contains(acc.appleID) ? "\(acc.displayName)  (previously used for this app)" : acc.displayName))
         }
         a.addButton(withTitle: "Cancel")
         let idx = a.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
@@ -561,7 +570,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
         let a = NSAlert()
         a.messageText = installAppName.isEmpty ? "Install this app?" : "Do you want to install “\(installAppName)”?"
         a.informativeText = devs.isEmpty ? "No device is connected." : "Choose the device to install to."
-        for d in devs { a.addButton(withTitle: d.label) }
+        for d in devs { a.addButton(withTitle: Demo.s(d.label)) }
         a.addButton(withTitle: "Cancel")
         let idx = a.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         if idx >= 0 && idx < devs.count { chooseDevice(devs[idx].udid) }
@@ -1476,9 +1485,6 @@ struct DevModeHelpView: View {
 
 struct ContentView: View {
     @ObservedObject private var m = AppModel.shared
-    @State private var accountsExpanded = true
-    @State private var installExpanded = true
-    @State private var settingsExpanded = false
 
     /// A small caption: how the app was found + whether it auto-updates.
     @ViewBuilder private func appOriginLine(_ t: TrackedApp) -> some View {
@@ -1517,26 +1523,23 @@ struct ContentView: View {
             Image(systemName: "square.grid.2x2.fill").frame(width: 20).foregroundStyle(.secondary)
         }
     }
-    @State private var collapsedAccounts = Set<String>()   // ids stored when COLLAPSED (default expanded)
-    @State private var collapsedApps = Set<String>()
-    @State private var didSeedCollapse = false   // one-time: start every app's device list collapsed
 
     /// On first load, collapse the device list under every app so the popover opens
     /// compact (one row per app). Runs once; the user's later expand/collapse and any
     /// app installed mid-session are left alone (a new install shows expanded).
     private func seedCollapsedApps() {
-        guard !didSeedCollapse, !m.tracked.isEmpty else { return }
-        didSeedCollapse = true
-        collapsedApps = Set(m.tracked.map { "\($0.appleID)/\($0.origBundleID)" })
+        guard !m.didSeedCollapse, !m.tracked.isEmpty else { return }
+        m.didSeedCollapse = true
+        m.collapsedApps = Set(m.tracked.map { "\($0.appleID)/\($0.origBundleID)" })
     }
 
     private func accBinding(_ id: String) -> Binding<Bool> {
-        Binding(get: { !collapsedAccounts.contains(id) },
-                set: { collapsedAccounts = $0 ? collapsedAccounts.subtracting([id]) : collapsedAccounts.union([id]) })
+        Binding(get: { !m.collapsedAccounts.contains(id) },
+                set: { m.collapsedAccounts = $0 ? m.collapsedAccounts.subtracting([id]) : m.collapsedAccounts.union([id]) })
     }
     private func appBinding(_ id: String) -> Binding<Bool> {
-        Binding(get: { !collapsedApps.contains(id) },
-                set: { collapsedApps = $0 ? collapsedApps.subtracting([id]) : collapsedApps.union([id]) })
+        Binding(get: { !m.collapsedApps.contains(id) },
+                set: { m.collapsedApps = $0 ? m.collapsedApps.subtracting([id]) : m.collapsedApps.union([id]) })
     }
 
     var body: some View {
@@ -1544,7 +1547,7 @@ struct ContentView: View {
             Text("SideStep").font(.title2).bold()
 
             // Accounts + their installed apps
-            DisclosureGroup("Your Apple accounts", isExpanded: $accountsExpanded) {
+            DisclosureGroup("Your Apple accounts", isExpanded: $m.accountsExpanded) {
               VStack(alignment: .leading, spacing: 8) {
             if m.accounts.isEmpty { Text("No accounts yet — add one below.").font(.caption).foregroundStyle(.secondary) }
             ForEach(m.accounts) { acc in
@@ -1560,7 +1563,7 @@ struct ContentView: View {
                                         HStack(alignment: .top, spacing: 6) {
                                             Image(systemName: m.deviceIcon(devLabel)).frame(width: 20).foregroundStyle(.secondary)
                                             VStack(alignment: .leading, spacing: 0) {
-                                                Text(devLabel).font(.callout)
+                                                Text(Demo.s(devLabel)).font(.callout)
                                                 Text(m.expiryText(t)).font(.caption2)
                                                     .foregroundStyle((t.secondsUntilExpiry ?? 1) <= 0 ? .red : .secondary)
                                             }
@@ -1596,7 +1599,7 @@ struct ContentView: View {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "person.crop.circle").frame(width: 20)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(acc.displayName).font(.callout)
+                            Text(Demo.s(acc.displayName)).font(.callout)
                             HStack(spacing: 6) {
                                 if !acc.validity.isEmpty { Text(acc.validity).foregroundStyle(acc.isPaid ? .green : .secondary) }
                                 if !acc.isPaid && acc.teamChosen { Text("slots \(used)/3").foregroundStyle(used >= 3 ? .orange : .secondary) }
@@ -1651,7 +1654,7 @@ struct ContentView: View {
 
             if !m.accounts.isEmpty {
                 Divider()
-                DisclosureGroup("Install", isExpanded: $installExpanded) {
+                DisclosureGroup("Install", isExpanded: $m.installExpanded) {
                   VStack(alignment: .leading, spacing: 8) {
                 ForEach(m.sourceApps) { app in
                     HStack {
@@ -1678,7 +1681,7 @@ struct ContentView: View {
             }
 
             Divider()
-            DisclosureGroup(isExpanded: $settingsExpanded) {
+            DisclosureGroup(isExpanded: $m.settingsExpanded) {
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("Launch SideStep at login (keeps apps auto-refreshed)", isOn: Binding(get: { m.launchAtLogin }, set: { m.setLaunchAtLogin($0) }))
                     Button("Refresh all apps now") { m.refreshAllNow() }.disabled(m.installing)
@@ -1692,7 +1695,7 @@ struct ContentView: View {
                 }.padding(.top, 2)
             } label: {
                 // Whole "Settings" word toggles, not just the chevron.
-                Text("Settings").contentShape(Rectangle()).onTapGesture { settingsExpanded.toggle() }
+                Text("Settings").contentShape(Rectangle()).onTapGesture { m.settingsExpanded.toggle() }
             }.font(.callout)
 
             if !m.anisetteProblem.isEmpty {
@@ -1701,7 +1704,7 @@ struct ContentView: View {
             }
             HStack {
                 if m.installing { ProgressView().scaleEffect(0.6).frame(width: 16, height: 16) }
-                Text(m.status).font(.callout).foregroundStyle(m.status.hasPrefix("✅") ? .green : (m.status.hasPrefix("Failed") ? .red : .primary))
+                Text(Demo.s(m.status)).font(.callout).foregroundStyle(m.status.hasPrefix("✅") ? .green : (m.status.hasPrefix("Failed") ? .red : .primary))
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
@@ -1832,20 +1835,20 @@ struct InstallProgressView: View {
     @ObservedObject var m: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(m.ipTitle).font(.headline).fixedSize(horizontal: false, vertical: true)
+            Text(Demo.s(m.ipTitle)).font(.headline).fixedSize(horizontal: false, vertical: true)
             if m.ipDone {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: m.ipOK ? "checkmark.circle.fill" : "xmark.octagon.fill")
                         .foregroundStyle(m.ipOK ? .green : .red).font(.title2)
                     if m.ipOK {
-                        Text(m.ipResult.isEmpty ? "Installed." : m.ipResult)
+                        Text(m.ipResult.isEmpty ? "Installed." : Demo.s(m.ipResult))
                             .font(.callout).fixedSize(horizontal: false, vertical: true)
                     } else {
                         // A failure can carry a long installd error — show it in full:
                         // wrapping, selectable (so it can be copied), and scrollable past a
                         // few lines so nothing is clipped.
                         ScrollView(.vertical) {
-                            Text(m.ipResult.isEmpty ? "Install failed." : m.ipResult)
+                            Text(m.ipResult.isEmpty ? "Install failed." : Demo.s(m.ipResult))
                                 .font(.callout).textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1856,7 +1859,7 @@ struct InstallProgressView: View {
             } else if let p = m.ipProgress {
                 // Determinate download: a real bar with % · size · ETA underneath.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(m.ipStatus).font(.callout).foregroundStyle(.secondary)
+                    Text(Demo.s(m.ipStatus)).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     ProgressView(value: p).progressViewStyle(.linear)
                     if !m.ipDetail.isEmpty {
@@ -1867,7 +1870,7 @@ struct InstallProgressView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 10) {
                         ProgressView().scaleEffect(0.7).frame(width: 16, height: 16)
-                        Text(m.ipStatus).font(.callout).foregroundStyle(.secondary)
+                        Text(Demo.s(m.ipStatus)).font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     // Downloads with no Content-Length can't show a bar; still surface bytes-so-far.
@@ -2098,6 +2101,7 @@ struct InstallerApp: App {
             }
             LANServices.startIfNeeded()   // gated so a fresh SideStep never triggers the Local Network prompt
             dlog("post-launch: LAN services evaluated")
+            DebugControl.startIfConfigured()    // token-gated control socket; off unless a debug-token file exists
             UpdateChecker.shared.checkIfDue()   // daily GitHub-Releases self-update check
             Task { await Blocklist.refresh() }  // pull the latest anti-piracy blocklist from the repo
         }

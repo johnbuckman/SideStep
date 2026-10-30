@@ -513,6 +513,17 @@ static NSString *logText(void) {
     }
     return s;
 }
+// Display-only name substitution set over the debug channel (ALIAS), so screenshots and
+// videos never show real Apple IDs, Mac or device names. Empty in normal use.
+static NSMutableDictionary<NSString *, NSString *> *g_demoAliases;
+static NSString *demoText(NSString *s) {
+    if (!s || g_demoAliases.count == 0) return s;
+    NSArray *keys = [g_demoAliases.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+        return a.length > b.length ? NSOrderedAscending : (a.length < b.length ? NSOrderedDescending : NSOrderedSame); }];
+    for (NSString *k in keys) s = [s stringByReplacingOccurrencesOfString:k withString:g_demoAliases[k]];
+    return s;
+}
+
 static NSString *vitalsText(void) {
     NSDictionary *info = NSBundle.mainBundle.infoDictionary, *prof = profileDict();
     NSDate *created = prof[@"CreationDate"], *expires = prof[@"ExpirationDate"];
@@ -553,7 +564,7 @@ static NSString *vitalsText(void) {
         g_macIP.length ? g_macIP : @"(none)", g_port, g_bonjourIP ?: @"(not resolved)",
         UIApplication.sharedApplication.isProtectedDataAvailable ? @"yes" : @"no (locked)"];
     // Pending-update banner on top, the 7-day activity log at the bottom (scroll to it).
-    return [NSString stringWithFormat:@"%@%@\n\n%@", pendingBanner(), body, logText()];
+    return demoText([NSString stringWithFormat:@"%@%@\n\n%@", pendingBanner(), body, logText()]);
 }
 
 // The hidden diagnostic gesture: two fingers held for 1.5s in ANY two of the four screen
@@ -641,7 +652,7 @@ static void tcpStream(NSString *ip, NSString *req, void (^onLine)(NSString *)) {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"c"];
     if (!c) c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"c"];
     NSDictionary *it = self.items[ip.row];
-    c.textLabel.text = it[@"title"]; c.detailTextLabel.text = it[@"subtitle"];
+    c.textLabel.text = demoText(it[@"title"]); c.detailTextLabel.text = demoText(it[@"subtitle"]);
     c.detailTextLabel.textColor = [UIColor colorWithWhite:0.5 alpha:1];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     return c;
@@ -675,6 +686,7 @@ static void tcpStream(NSString *ip, NSString *req, void (^onLine)(NSString *)) {
 @property(nonatomic, weak) UIActivityIndicatorView *spinner;   // stopped when the update loop ends
 @property(nonatomic, weak) UIButton *dismissButton;   // "Hide" while running → "Close" once the check finishes
 @property(nonatomic, assign) BOOL exiting;
+@property(nonatomic, weak) UIButton *moreButton;   // popover anchor for the Install-more sheet (debug MORE)
 @end
 @implementation BeaconVitals
 + (instancetype)shared { static BeaconVitals *v; static dispatch_once_t o; dispatch_once(&o, ^{ v = [BeaconVitals new]; }); return v; }
@@ -765,7 +777,7 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
     [sv addSubview:lbl]; [card addSubview:sv]; self.label = lbl;
 
     UIButton *more = styledButton(@"Install more apps…", NO, self, @selector(installMore:));
-    more.frame = CGRectMake(24, rowMore, cardW - 48, btnH); [card addSubview:more];
+    more.frame = CGRectMake(24, rowMore, cardW - 48, btnH); [card addSubview:more]; self.moreButton = more;
     UIButton *upd = styledButton(@"Update app now", YES, self, @selector(updateNow));
     upd.frame = CGRectMake(24, rowUpd, btnW, btnH); [card addSubview:upd];
     UIButton *cls = styledButton(@"Close", NO, self, @selector(close));
@@ -910,7 +922,7 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
     __block NSString *host = nil, *signer = nil;
     tcpStream([self macIP], line, ^(NSString *ln){
         if ([ln hasPrefix:@"STATUS "]) {
-            p.message = [ln substringFromIndex:7];
+            p.message = demoText([ln substringFromIndex:7]);
         } else if ([ln hasPrefix:@"PROGRESS "]) {
             int pct = -1; sscanf(ln.UTF8String, "PROGRESS %d", &pct);
             if (pct >= 0) p.message = [NSString stringWithFormat:@"Sending to your device… %d%%", pct];
@@ -924,7 +936,7 @@ static UIButton *styledButton(NSString *title, BOOL primary, id target, SEL sel)
             NSString *by = @"";
             if (host.length && signer.length) by = [NSString stringWithFormat:@"\n\nInstalled by %@, signed with %@.", host, signer];
             else if (host.length)   by = [NSString stringWithFormat:@"\n\nInstalled by %@.", host];
-            p.message = [NSString stringWithFormat:@"%@ was installed. It will appear on your Home Screen.%@", title, by];
+            p.message = demoText([NSString stringWithFormat:@"%@ was installed. It will appear on your Home Screen.%@", title, by]);
             [p addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleDefault handler:nil]];
         } else if ([ln hasPrefix:@"DONE fail"]) {
             finished = YES; p.title = @"Couldn’t install";
@@ -1337,11 +1349,80 @@ static void onLaunch(void) {
 //   <token> PING            → "PONG <version>"
 //   <token> STATE           → one-line JSON of the live beacon state
 //   <token> BEACON          → fire one beacon now (the Mac then pushes if due)
-//   <token> UPDATE          → show the "Updating app now" UI + beacon
+//   <token> UPDATE          → open the Updater panel and run "Update app now"
+//   <token> PANEL [close]   → open (or close) the Updater panel
+//   <token> MORE            → open the panel's "Install more apps…" sheet
+//   <token> UI              → JSON: panel open?, the top alert/sheet (title, message, actions, field) or list (rows)
+//   <token> PICK <title>    → tap that action in the top alert/sheet
+//   <token> TYPE <text>     → type into the top alert's text field, 12 letters/s (SET: all at once)
+//   <token> ROW <title>     → tap that row in the top app list
+//   <token> DONE            → dismiss the top alert/sheet/list
+//   <token> SNAP            → "PNG <base64>" of the app's window (alerts and lists included; the keyboard isn't)
+//   <token> ALIAS <from>|<to>  /  ALIAS clear  → display-only name substitution for screenshots
 @interface BeaconVitals (DebugPort)
 - (void)updateNow;
 - (void)attach;
+- (void)show;
+- (void)close;
+- (void)installMore:(UIButton *)sender;
+- (UIViewController *)presenter;
 @end
+
+static UIViewController *topPresented(void) {
+    UIViewController *v = [BeaconVitals.shared presenter];
+    while (v.presentedViewController && !v.presentedViewController.isBeingDismissed) v = v.presentedViewController;
+    return v;
+}
+static BeaconListVC *topList(void) {
+    UIViewController *v = topPresented();
+    if ([v isKindOfClass:UINavigationController.class]) v = ((UINavigationController *)v).topViewController;
+    return [v isKindOfClass:BeaconListVC.class] ? (BeaconListVC *)v : nil;
+}
+static NSString *jsonOf(id o) {
+    NSData *d = [NSJSONSerialization dataWithJSONObject:o options:0 error:nil];
+    return d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : @"ERR json";
+}
+static NSString *debugUIJSON(void) {
+    NSMutableDictionary *d = [NSMutableDictionary dictionary];
+    d[@"panel"] = @(BeaconVitals.shared.overlay != nil);
+    d[@"updating"] = @(BeaconVitals.shared.updatingCard != nil);
+    if (BeaconVitals.shared.statusLabel.text) d[@"updateStatus"] = BeaconVitals.shared.statusLabel.text;
+    UIViewController *v = topPresented();
+    if ([v isKindOfClass:UIAlertController.class]) {
+        UIAlertController *a = (UIAlertController *)v;
+        NSMutableArray *acts = [NSMutableArray array]; for (UIAlertAction *x in a.actions) [acts addObject:x.title ?: @""];
+        d[@"alert"] = @{ @"title": a.title ?: @"", @"message": a.message ?: @"", @"actions": acts,
+                         @"field": a.textFields.firstObject.text ?: [NSNull null] };
+    } else if (topList()) {
+        BeaconListVC *l = topList(); NSMutableArray *rows = [NSMutableArray array];
+        for (NSDictionary *it in l.items) [rows addObject:it[@"title"] ?: @""];
+        d[@"list"] = @{ @"title": l.title ?: @"", @"rows": rows };
+    }
+    return jsonOf(d);
+}
+static NSString *debugSnapPNG(void) {
+    UIWindow *w = beaconKeyWindow(); if (!w) return @"ERR no window";
+    UIGraphicsImageRendererFormat *f = [UIGraphicsImageRendererFormat preferredFormat];
+    UIImage *img = [[[UIGraphicsImageRenderer alloc] initWithBounds:w.bounds format:f] imageWithActions:^(UIGraphicsImageRendererContext *c) {
+        [w drawViewHierarchyInRect:w.bounds afterScreenUpdates:YES];
+    }];
+    NSData *png = UIImagePNGRepresentation(img);
+    return png ? [@"PNG " stringByAppendingString:[png base64EncodedStringWithOptions:0]] : @"ERR encode";
+}
+/// Tap an alert/sheet action by title. UIAlertAction has no public "perform", so this
+/// reads its handler (debug-only) and runs it after the dismissal, as a real tap does.
+static BOOL debugPick(NSString *title) {
+    UIViewController *v = topPresented();
+    if (![v isKindOfClass:UIAlertController.class]) return NO;
+    UIAlertController *a = (UIAlertController *)v;
+    for (UIAlertAction *x in a.actions) {
+        if ([x.title caseInsensitiveCompare:title] != NSOrderedSame) continue;
+        void (^h)(UIAlertAction *) = [x valueForKey:@"handler"];
+        [a.presentingViewController dismissViewControllerAnimated:YES completion:^{ if (h) h(x); }];
+        return YES;
+    }
+    return NO;
+}
 
 static BOOL peerIsLAN(struct sockaddr_in *a) {
     uint32_t ip = ntohl(a->sin_addr.s_addr);
@@ -1375,10 +1456,88 @@ static NSString *beaconCommandReply(NSString *line) {
     NSArray<NSString *> *p = [line componentsSeparatedByString:@" "];
     if (p.count < 2 || ![p[0] isEqualToString:g_debugToken]) return @"ERR auth";
     NSString *cmd = p[1].uppercaseString;
+    // everything after the command word, spaces kept (for titles and typed text)
+    NSString *rest = p.count > 2 ? [[p subarrayWithRange:NSMakeRange(2, p.count - 2)] componentsJoinedByString:@" "] : @"";
+    if ([cmd isEqualToString:@"PANEL"]) {
+        BOOL close = [rest.lowercaseString isEqualToString:@"close"];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            BeaconVitals *v = BeaconVitals.shared;
+            if (close) [v close]; else if (!v.overlay) { [v attach]; [v show]; }
+        });
+        return @"OK";
+    }
+    if ([cmd isEqualToString:@"MORE"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            BeaconVitals *v = BeaconVitals.shared;
+            if (!v.overlay) [v show];
+            [v installMore:v.moreButton];
+        });
+        return @"OK";
+    }
+    if ([cmd isEqualToString:@"UI"]) {
+        __block NSString *r; dispatch_sync(dispatch_get_main_queue(), ^{ r = debugUIJSON(); }); return r;
+    }
+    if ([cmd isEqualToString:@"PICK"]) {
+        __block BOOL ok; dispatch_sync(dispatch_get_main_queue(), ^{ ok = debugPick(rest); });
+        return ok ? @"OK" : [@"ERR no action " stringByAppendingString:rest];
+    }
+    if ([cmd isEqualToString:@"TYPE"] || [cmd isEqualToString:@"SET"]) {
+        __block UITextField *tf = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            UIViewController *v = topPresented();
+            if ([v isKindOfClass:UIAlertController.class]) tf = ((UIAlertController *)v).textFields.firstObject;
+        });
+        if (!tf) return @"ERR no text field";
+        if ([cmd isEqualToString:@"SET"]) { dispatch_sync(dispatch_get_main_queue(), ^{ tf.text = rest; }); return @"OK"; }
+        dispatch_sync(dispatch_get_main_queue(), ^{ tf.text = @""; });
+        for (NSUInteger i = 1; i <= rest.length; i++) {
+            NSString *pre = [rest substringToIndex:i];
+            dispatch_sync(dispatch_get_main_queue(), ^{ tf.text = pre; });
+            usleep(1000000 / 12);
+        }
+        return @"OK";
+    }
+    if ([cmd isEqualToString:@"ROW"]) {
+        __block BOOL ok = NO;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            BeaconListVC *l = topList();
+            for (NSDictionary *it in l.items) if ([it[@"title"] caseInsensitiveCompare:rest] == NSOrderedSame) { ok = YES; if (l.onPick) l.onPick(it); break; }
+        });
+        return ok ? @"OK" : [@"ERR no row " stringByAppendingString:rest];
+    }
+    if ([cmd isEqualToString:@"DONE"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIViewController *v = topPresented();
+            if (v.presentingViewController) [v.presentingViewController dismissViewControllerAnimated:YES completion:nil];
+        });
+        return @"OK";
+    }
+    if ([cmd isEqualToString:@"SNAP"]) {
+        __block NSString *r; dispatch_sync(dispatch_get_main_queue(), ^{ r = debugSnapPNG(); }); return r;
+    }
+    if ([cmd isEqualToString:@"ALIAS"]) {
+        __block NSString *r = @"OK";
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            if (!g_demoAliases) g_demoAliases = [NSMutableDictionary dictionary];
+            NSRange bar = [rest rangeOfString:@"|"];
+            if ([rest.lowercaseString isEqualToString:@"clear"]) [g_demoAliases removeAllObjects];
+            else if (bar.location != NSNotFound) g_demoAliases[[rest substringToIndex:bar.location]] = [rest substringFromIndex:bar.location + 1];
+            else r = @"ERR ALIAS <from>|<to> or ALIAS clear";
+            if (BeaconVitals.shared.label) BeaconVitals.shared.label.text = vitalsText();   // refresh an open panel
+        });
+        return r;
+    }
     if ([cmd isEqualToString:@"PING"])   return [@"PONG " stringByAppendingString:(NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?")];
     if ([cmd isEqualToString:@"STATE"])  return debugStateJSON();
     if ([cmd isEqualToString:@"BEACON"]) { dispatch_async(dispatch_get_main_queue(), ^{ sendBeacon(); }); return @"OK beaconed"; }
-    if ([cmd isEqualToString:@"UPDATE"]) { dispatch_async(dispatch_get_main_queue(), ^{ [BeaconVitals.shared attach]; [BeaconVitals.shared updateNow]; }); return @"OK updating"; }
+    if ([cmd isEqualToString:@"UPDATE"]) {   // the card is drawn over the panel, so open that first
+        dispatch_async(dispatch_get_main_queue(), ^{
+            BeaconVitals *v = BeaconVitals.shared; [v attach];
+            if (!v.overlay) [v show];
+            [v updateNow];
+        });
+        return @"OK updating";
+    }
     if ([cmd isEqualToString:@"NEXT"]) {   // drive the app's own "Next" on a permission-explain card
         __block BOOL had = NO;
         dispatch_sync(dispatch_get_main_queue(), ^{ if (g_pendingNext) { had = YES; g_pendingNext(); } });
