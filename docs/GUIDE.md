@@ -1,5 +1,9 @@
 # SideStep — the complete guide
 
+> The illustrated, always-current guide is **<https://johnbuckman.github.io/SideStep/help.html>**
+> (and a 3-minute video tour: <https://youtu.be/MM5PfgjOk8E>). This file is the same ground in
+> plain Markdown for reading on GitHub.
+
 This guide walks you through everything: what SideStep is, what you need, exactly
 what to do on your Mac **and** on your iPhone/iPad, and — importantly — the real
 benefits and limits so you know what you're getting into before you start.
@@ -27,9 +31,11 @@ The catch with free Apple IDs is that Apple only makes those profiles valid for
 before they expire, as long as the app is running on your Mac and your device is
 reachable.
 
-**Everything happens from your Mac.** The iPhone/iPad has no special software on
-it — it just receives the signed app. That also means the apps stay tied to *this*
-Mac (it holds your logins and signing certificate).
+**The signing happens on your Mac.** Each app SideStep installs also carries a small
+helper (the "beacon"): when you open the app it checks in with your Mac over Wi-Fi, so the
+Mac can send a fresh copy without a cable. It also gives every app a hidden status panel
+(hold two fingers in two corners of the screen) with **Update app now** and **Install more
+apps…**. The apps stay tied to *this* Mac (it holds your logins and signing certificate).
 
 ---
 
@@ -37,8 +43,8 @@ Mac (it holds your logins and signing certificate).
 
 - A **Mac** (macOS 14 or newer).
 - An **iPhone or iPad**.
-- A **USB/Lightning/USB-C cable** to connect them. (Wi-Fi is possible but
-  unreliable on modern iOS — see §9.)
+- A **USB/Lightning/USB-C cable** for the first install. After that, installs and
+  renewals also work over Wi-Fi (same network, device unlocked).
 - An **Apple ID**. A **free** one works. You can create a fresh one at
   <https://icloud.com> — a dedicated "sideloading" Apple ID is recommended so you
   don't tie up your main account's developer slots.
@@ -112,10 +118,9 @@ revokes the certificates other developers on that team rely on.
 > see "Untrusted Developer" or the app just won't open. If you don't see a
 > Developer Mode option, connect the device to the Mac once and it should appear.
 
-**d. (Optional) Enable Wi-Fi sync** if you want to *try* refreshing without a
-cable: with the device plugged in, open **Finder → [your device] → General →
-"Show this iPhone/iPad when on Wi-Fi"**. (See §9 for why USB is still the reliable
-path.)
+**d. Wi-Fi comes for free.** During the first USB install SideStep switches on the
+device's Wi-Fi connection to your Mac by itself (what Finder's "Show this iPhone when on
+Wi-Fi" does), so later installs and renewals can happen without a cable.
 
 ---
 
@@ -130,8 +135,8 @@ path.)
    panel. The panel grows and shrinks to fit its contents as you expand or collapse
    sections.
 
-> **Requirements:** macOS 14 (Sonoma) or newer, Apple Silicon. This is still a
-> **beta** — please report anything rough.
+> **Requirements:** macOS 14 (Sonoma) or newer, Apple silicon or Intel. Releases are
+> still marked pre-release — please report anything rough.
 
 Optionally, in the panel's **Settings** section, enable **"Launch SideStep at
 login"** so it's always running and can keep your apps refreshed.
@@ -190,6 +195,11 @@ there's no separate background program:
   (about 2 days before expiry). It pushes the update **the moment your device is
   reachable over USB or WiFi** — and near expiry it re-checks **every 5 minutes**,
   installing as soon as the device is awake/unlocked and on the network.
+- Each app also **checks in by itself** when you open it (and every 10 minutes while it's
+  open): if it's due, the Mac signs a fresh copy and sends it over Wi-Fi, and the new
+  version takes over next time you open the app. A day before an app would expire, the
+  device shows an "Update needed soon" notification.
+- Once a day SideStep also installs **new versions** of apps from GitHub and the catalog.
 - There's also a **Refresh all apps now** button, and a per-app **Refresh**.
 
 **Practical rule of thumb:** plug your device into this Mac every few days (before
@@ -245,8 +255,8 @@ another Apple ID) to make room.
   unlocked** — installs won't run against a *locked* device. That's exactly why,
   once an app is near expiry, SideStep re-checks **every 5 minutes** and pushes
   the moment the device is reachable and unlocked (so a device you pick up now and
-  then will stay signed). Enable Wi-Fi sync (§4d) to allow it. **USB is still the
-  most reliable** — a quick plug-in always refreshes everything that's due.
+  then will stay signed). **USB is still the most reliable** — a quick plug-in always
+  refreshes everything that's due.
 - **Rotating certificates:** if the saved certificate is ever lost or revoked,
   SideStep issues a new one; because a free account has only one certificate, the
   next refresh re-signs your apps onto the new one (they may briefly need that

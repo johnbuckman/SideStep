@@ -61,9 +61,14 @@ Each device scenario installs a tiny, version-stamped test app built by
   Mac-side end of the beacon control channel).
 - **Beacon control channel** — on launch the injected beacon **dials out** to the Mac
   (`g_macIP:51236`) — the reliable direction — and answers token+LAN-gated commands:
-  `PING`, `STATE` (JSON: version, beacons, lnGranted, autoUpdates, macIP, profileExpiry),
-  `BEACON`, `UPDATE`, `NEXT` (drives the app's own "Local network access → Next" button).
-  Config is baked into each install's `BeaconConfig.plist`.
+  `PING`, `STATE` (JSON: version, bundle, beacons, lnGranted, autoUpdates, macIP,
+  profileExpiry, lastReason), `BEACON`, `UPDATE`, plus the UI commands added for
+  screenshots/videos: `PANEL`, `MORE`, `UI`, `PICK`, `TYPE`/`SET`, `ROW`, `DONE`, `SNAP`,
+  `ALIAS`. `NEXT` is obsolete (the app's own permission explainer cards were removed; it
+  always answers `ERR no pending prompt`). Config is baked into each install's
+  `BeaconConfig.plist`. The Mac-side end is `Provision --beacon-serve` here, or — when a
+  debug token is configured — the SideStep app itself, which relays `DEVICE …` commands
+  (see [DEBUG-CONTROL.md](DEBUG-CONTROL.md); both use port 51236, so don't run them together).
 
 ## Known gotchas
 
@@ -71,8 +76,8 @@ Each device scenario installs a tiny, version-stamped test app built by
   launch an app on iOS 17+) uses the CoreDevice tunnel, which wedges the `libimobiledevice`
   install path until a **USB replug**. Don't interleave it with the install/oracle tests —
   open the test app by hand instead, then run `04-beacon`.
-- **The beacon needs a one-time Local Network grant** (open the app → Next → iOS "Allow").
-  The app can't tap the system "Allow"; `NEXT` only drives the app's own card.
+- **The beacon needs a one-time Local Network grant** (open the app → iOS "Allow"). The app
+  can't tap the system "Allow", so grant it by hand once per test install.
 - **Installing over a *running* app defers the swap** — `installd` reports OK but the old
   version keeps running until the app exits. The suite pre-cleans (uninstalls any running
   instance) before each install so version asserts are reliable.
