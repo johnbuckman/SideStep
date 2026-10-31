@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SideStep apps</title>
+<meta name="description" content="Apps you can install on your iPhone or iPad with SideStep, each with a one-click install button: iWish, Magnatune, Stay on Track, dcamp, de1app, Decaid, Decent Cocktails and Decent Timer.">
+<link rel="icon" href="screenshots/appicon.png">
+<meta property="og:title" content="Apps you can install with SideStep">
+<meta property="og:description" content="One-click installs for iPhone and iPad apps the App Store doesn't carry.">
+<style>
+/* Hand-written, same palette and parts as index.html. */
+:root{
+  --bg:#fdf9f3; --panel:#fff; --ink:#1c1c1c; --ink-soft:#55524c; --muted:#8a8579;
+  --line:#ece6db; --line-strong:#ddd5c7; --accent:#e8902a; --accent-ink:#b8650c; --link:#1d64c2; --btn:#16a34a;
+  --hero1:#3d5aa8; --hero2:#24346e; --hero3:#141c3c;
+  --shadow:0 1px 2px rgba(40,30,10,.06), 0 8px 24px rgba(40,30,10,.07);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#16130f; --panel:#211d18; --ink:#ece7dd; --ink-soft:#b8b1a4; --muted:#938c7f;
+    --line:#332e26; --line-strong:#443d32; --link:#7ab0f2; --accent-ink:#f0a24a;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.45);
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+img{max-width:100%;height:auto;display:block}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+.top{position:absolute;inset:0 0 auto;z-index:3}
+.top .wrap{display:flex;align-items:center;gap:22px;padding-top:16px;padding-bottom:16px}
+.brand{display:flex;align-items:center;gap:10px;color:#fff;font-weight:700;font-size:18px}
+.brand img{width:30px;height:30px}
+.top nav{margin-left:auto;display:flex;gap:22px;font-size:15px}
+.top nav a{color:rgba(255,255,255,.85)}
+.top nav a.here{color:#fff;font-weight:600}
+.hero{background:radial-gradient(120% 100% at 25% 15%,var(--hero1) 0%,var(--hero2) 55%,var(--hero3) 100%);color:#fff;padding:110px 0 60px}
+.hero h1{font-size:52px;line-height:1.05;letter-spacing:-.02em;margin:0 0 14px}
+.hero .lead{font-size:22px;line-height:1.4;margin:0;color:rgba(255,255,255,.85);max-width:36em}
+.hero .lead a{color:#fff;text-decoration:underline;text-decoration-color:rgba(255,255,255,.4)}
+section{padding:56px 0}
+section.alt{background:var(--panel);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+h2{font-size:32px;letter-spacing:-.015em;line-height:1.15;margin:0 0 12px}
+.kicker{font-size:14px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-ink);margin:0 0 8px}
+p{color:var(--ink-soft)}
+b,strong{color:var(--ink)}
+.apps{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+.app{display:grid;grid-template-columns:72px 1fr;gap:18px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px;box-shadow:var(--shadow)}
+.app img.icon{width:72px;height:72px;border-radius:16px;border:1px solid var(--line)}
+.app h3{font-size:20px;margin:0}
+.app .by{font-size:14px;color:var(--muted);margin:0 0 8px}
+.app p.desc{margin:0 0 14px;font-size:15.5px}
+.app .meta{font-size:13.5px;color:var(--muted);margin:10px 0 0}
+.app .meta a{color:var(--ink-soft)}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.step .n{width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center}
+.step h3{font-size:19px;margin:12px 0 4px}
+.step p{margin:0;font-size:16px}
+footer{padding:44px 0 60px;color:var(--muted);font-size:14.5px}
+footer a{color:var(--ink-soft)}
+@media(max-width:900px){ .apps,.steps{grid-template-columns:1fr} .hero h1{font-size:40px} .top nav a:not(.keep){display:none} }
+@media(max-width:480px){ .app{grid-template-columns:52px 1fr;gap:14px} .app img.icon{width:52px;height:52px;border-radius:12px} }
+</style>
+</head>
+<body>
+
+<header class="top"><div class="wrap">
+  <a class="brand" href="./"><img src="screenshots/appicon.png" alt="">SideStep</a>
+  <nav>
+    <a href="https://youtu.be/MM5PfgjOk8E">Video</a>
+    <a href="help.html">Guide</a>
+    <a href="apps.html" class="keep here">Apps</a>
+    <a href="https://johnbuckman.github.io/SideStepWizard/">Wizard</a>
+    <a href="https://github.com/johnbuckman/SideStep">GitHub</a>
+  </nav>
+</div></header>
+
+<div class="hero"><div class="wrap">
+  <h1>Apps you can install</h1>
+  <p class="lead">Every app in the SideStep catalog, each with its own install button. On a Mac with <a href="./">SideStep</a>, a click opens it straight to that app. Without SideStep, most buttons download a one-file installer that sets everything up for you.</p>
+</div></div>
+
+<section><div class="wrap">
+  <div class="apps">
+
+    <div class="app">
+      <img class="icon" src="https://github.com/johnbuckman/SideStep/releases/download/apps/iwish-icon.png" alt="">
+      <div>
+        <h3>iWish</h3><p class="by">John Buckman · iPhone and iPad</p>
+        <p class="desc">Tcl/Tk on iOS: a full scripting language and GUI toolkit running on the device, with over 100 bundled extensions, Bluetooth LE and demo apps.</p>
+        <span class="sidestep-install" data-repo="johnbuckman/iwish" data-app="iWish" data-installer="https://github.com/johnbuckman/iwish/releases/download/v0.2.2/iwish-installer.zip"></span>
+        <p class="meta"><a href="https://johnbuckman.github.io/tcltk/iwish.html">Website</a> · <a href="https://github.com/johnbuckman/iwish">GitHub</a></p>
+      </div>
+    </div>
+
+    <div class="app">
+      <img class="icon" src="https://github.com/johnbuckman/SideStep/releases/download/apps/magnatune-icon.png" alt="">
+      <div>
+        <h3>Magnatune</h3><p class="by">Magnatune · iPhone and iPad</p>
+        <p class="desc">Stream and download the whole Magnatune catalog of independent, artist-friendly music.</p>
+        <span class="sidestep-install" data-repo="johnbuckman/magnatune-app" data-app="Magnatune" data-installer="https://github.com/johnbuckman/magnatune-app/releases/latest/download/magnatune-app-installer.zip"></span>
+        <p class="meta"><a href="https://johnbuckman.github.io/magnatune.html">Website</a> · <a href="https://github.com/johnbuckman/magnatune-app">GitHub</a></p>
+      </div>
+    </div>
+
+    <div class="app">
+      <img class="icon" src="https://github.com/johnbuckman/SideStep/releases/download/apps/stayontrack-icon.png" alt="">
+      <div>
+        <h3>Stay on Track</h3><p class="by">John Buckman · iPhone</p>
+        <p class="desc">A fully offline hiking companion: a voice calls out "left", "right" or "straight" at every trail junction.</p>
+        <span class="sidestep-install" data-repo="johnbuckman/stayontrack" data-app="Stay on Track" data-installer="https://github.com/johnbuckman/stayontrack/releases/latest/download/stayontrack-installer.zip"></span>
+        <p class="meta"><a href="https://johnbuckman.github.io/stayontrack.html">Website</a> · <a href="https://github.com/johnbuckman/stayontrack">GitHub</a></p>
+      </div>
+    </div>
+
+    <div class="app">
+      <img class="icon" src="https://github.com/johnbuckman/SideStep/releases/download/apps/dcamp-icon.png" alt="">
+      <div>
+        <h3>dcamp</h3><p class="by">Decent Espresso · iPhone and iPad</p>
+        <p class="desc">The Decent Espresso owners' forum: read and post, chat and message other owners, and get AI summaries of long threads.</p>
+        <span class="sidestep-install" data-repo="johnbuckman/dcamp-ios" data-app="dcamp" data-installer="https://github.com/johnbuckman/dcamp-ios/releases/latest/download/dcamp-installer.zip"></span>
+        <p class="meta"><a href="https://johnbuckman.github.io/dcamp-ios.html">Website</a> · <a href="https://github.com/johnbuckman/dcamp-ios">GitHub</a></p>
+      </div>
+    </div>
+
+    <div class="app">
+      <img class="icon" src="https://github.com/johnbuckman/SideStep/releases/download/apps/de1app-icon.png" alt="">
+      <div>
+        <h3>de1app</h3><p class="by">Decent Espresso · iPad</p>
+        <p class="desc">The original controller app for the Decent espresso machine, running on Tcl/Tk through iWish. It updates itself in place.</p>
+        <span class="sidestep-install" data-repo="decentespresso/de1app" data-app="de1app" data-installer="https://github.com/decentespresso/de1app/releases/download/v1.46.1.156/de1app-ios-installer.zip"></span>
+        <p class="meta"><a href="https://decentespresso.com/downloads">Website</a> · <a href="https://github.com/decentespresso/de1app">GitHub</a></p>
+      </div>
+    </div>
+
+    <div class="app">
+      <img class="icon" src="https://github.com/johnbuckman/SideStep/releases/download/apps/decent-icon.png" alt="">
+      <div>
+        <h3>Decaid</h3><p class="by">Decent Espresso · iPhone and iPad</p>
+        <p class="desc">The open-source controller app for the Decent espresso machine (formerly "reaprime").</p>
+        <span class="sidestep-install" data-repo="decentespresso/decaid" data-app="Decaid"></span>
+        <p class="meta"><a href="https://github.com/decentespresso/decaid">GitHub</a> · needs SideStep installed first</p>
+      </div>
+    </div>
+
+    <div class="app">
+      <img class="icon" src="https://github.com/johnbuckman/SideStep/releases/download/apps/decent-cocktails-icon.png" alt="">
+      <div>
+        <h3>Decent Cocktails</h3><p class="by">Decent Espresso · iPhone and iPad</p>
+        <p class="desc">Every cocktail from The PDT Cocktail Book and Death &amp; Co, weighed to the gram and working offline.</p>
+        <span class="sidestep-install" data-repo="decentespresso/cocktails-ios" data-app="Decent Cocktails"></span>
+        <p class="meta"><a href="https://decentespresso.com/cocktails/">Website</a> · <a href="https://github.com/decentespresso/cocktails-ios">GitHub</a> · needs SideStep installed first</p>
+      </div>
+    </div>
+
+    <div class="app">
+      <img class="icon" src="https://github.com/johnbuckman/SideStep/releases/download/apps/timer-icon.png" alt="">
+      <div>
+        <h3>Decent Timer</h3><p class="by">John Buckman · iPad</p>
+        <p class="desc">A simple kitchen timer for older iPads the App Store no longer supports: a good way to keep an old device useful.</p>
+        <span class="sidestep-install" data-repo="johnbuckman/Kitchen-timer-for-old-iPads" data-app="Decent Timer" data-installer="https://github.com/johnbuckman/Kitchen-timer-for-old-iPads/releases/download/installer/decent-timer-installer.zip"></span>
+        <p class="meta"><a href="https://johnbuckman.github.io/kitchen-timer.html">Website</a> · <a href="https://github.com/johnbuckman/Kitchen-timer-for-old-iPads">GitHub</a></p>
+      </div>
+    </div>
+
+  </div>
+</div></section>
+
+<section class="alt"><div class="wrap">
+  <p class="kicker">How the buttons work</p>
+  <h2>Three steps, the first time</h2>
+  <div class="steps">
+    <div class="step"><div class="n">1</div><h3>Click on a Mac</h3><p>If SideStep is installed it opens and asks to install the app. If not, the button downloads that app's installer.</p></div>
+    <div class="step"><div class="n">2</div><h3>Plug in the device</h3><p>The installer gets SideStep, then walks you through the cable, Trust and Developer Mode, and signing in with an Apple ID (a free one works).</p></div>
+    <div class="step"><div class="n">3</div><h3>Trust it once</h3><p>On the device, open Settings ▸ General ▸ VPN &amp; Device Management and trust your Apple ID. SideStep keeps the app signed and up to date from then on.</p></div>
+  </div>
+  <p style="margin-top:28px">Making an app of your own? <a href="https://johnbuckman.github.io/SideStepWizard/">SideStep Wizard</a> builds the same one-file installer and button for any GitHub project. To add an app to this catalog, open a pull request on <a href="https://github.com/johnbuckman/SideStep">GitHub</a>.</p>
+</div></section>
+
+<footer><div class="wrap">
+  <p><a href="./">← SideStep</a> · <a href="help.html">The full guide</a> · <a href="https://github.com/johnbuckman/SideStep">Source on GitHub</a></p>
+</div></footer>
+
+<script src="install-button.js"></script>
+</body>
+</html>
