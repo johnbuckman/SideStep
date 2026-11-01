@@ -74,31 +74,79 @@ public enum ReauthGate {
     /// Record the outcome of an attempt started with `begin`. Returns a log line for failures.
     @discardableResult
     public static func finish(_ appleID: String, error: Error?, now: Date = Date()) -> String {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         inFlight.remove(appleID)
         var m = load()
-        guard let error else {
-            if m.removeValue(forKey: appleID) != nil { save(m) }
-            return ""
-        }
-        let n = (m[appleID]?.failures ?? 0) + 1
-        let detail = describe(error)
-        if let reason = needsUser(error) {
-            m[appleID] = Entry(reason: reason, failures: n, until: nil)
+        let before = m[appleID]
+        var line = ""
+        if let error {
+            let n = (before?.failures ?? 0) + 1
+            let detail = describe(error)
+            if let reason = needsUser(error) {
+                m[appleID] = Entry(reason: reason, failures: n, until: nil)
+                line = "\(reason) (\(detail)) — automatic sign-in paused until you sign in again in SideStep"
+            } else {
+                let delay = min(baseDelay * pow(2, Double(n - 1)), maxDelay)
+                // The stored reason is shown in the panel: plain text only; domain + code go to the log line.
+                m[appleID] = Entry(reason: "sign-in failed: \(plainText(error))", failures: n, until: now.timeIntervalSince1970 + delay)
+                line = "\(detail) — next automatic try in \(Int(delay / 60)) min (failure \(n))"
+            }
             save(m)
-            return "\(reason) (\(detail)) — automatic sign-in paused until you sign in again in SideStep"
+        } else if before != nil {
+            m.removeValue(forKey: appleID)
+            save(m)
         }
-        let delay = min(baseDelay * pow(2, Double(n - 1)), maxDelay)
-        m[appleID] = Entry(reason: "sign-in failed: \(detail)", failures: n, until: now.timeIntervalSince1970 + delay)
-        save(m)
-        return "\(detail) — next automatic try in \(Int(delay / 60)) min (failure \(n))"
+        let after = m[appleID]
+        lock.unlock()
+        if before != nil || after != nil {
+            // A pause that needs the user just began (not merely continued): worth telling them.
+            let pauseStarted = after != nil && after?.until == nil && !(before != nil && before?.until == nil)
+            announce(appleID, pauseStarted: pauseStarted)
+        }
+        return line
     }
 
     /// Forget any pause for this Apple ID (after an interactive sign-in, or when it's removed).
     public static func clear(_ appleID: String) {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         var m = load()
-        if m.removeValue(forKey: appleID) != nil { save(m) }
+        let removed = m.removeValue(forKey: appleID) != nil
+        if removed { save(m) }
+        lock.unlock()
+        if removed { announce(appleID, pauseStarted: false) }
+    }
+
+    // MARK: status for the UI
+
+    /// Posted on the main queue whenever an Apple ID's pause starts, changes or ends.
+    /// userInfo: "appleID" (String) and `pauseStartedKey` (Bool, true when a pause that
+    /// needs the user to sign in has just begun).
+    public static let changed = Notification.Name("SideStepReauthGateChanged")
+    public static let pauseStartedKey = "pauseStarted"
+
+    public struct Status: Equatable, Sendable {
+        public let reason: String
+        /// true: paused until the user signs in again; false: backing off until `until`.
+        public let needsUser: Bool
+        public let until: Date?
+    }
+
+    /// The current pause for this Apple ID, or nil if automatic sign-in may run.
+    public static func status(_ appleID: String, now: Date = Date()) -> Status? {
+        lock.lock(); defer { lock.unlock() }
+        guard let e = load()[appleID] else { return nil }
+        if let u = e.until, u <= now.timeIntervalSince1970 { return nil }
+        return Status(reason: e.reason, needsUser: e.until == nil, until: e.until.map { Date(timeIntervalSince1970: $0) })
+    }
+
+    /// Never posts synchronously or while holding `lock`: observers may sit on the main thread,
+    /// and a synchronous post from a background thread under a lock is exactly how
+    /// Anisette.lastFailure can deadlock the UI.
+    private static func announce(_ appleID: String, pauseStarted: Bool) {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: changed, object: nil,
+                                            userInfo: ["appleID": appleID, pauseStartedKey: pauseStarted])
+        }
     }
 
     // MARK: classification
@@ -126,11 +174,16 @@ public enum ReauthGate {
         return nil
     }
 
+    /// For the log: the message plus error domain and code.
     private static func describe(_ error: Error) -> String {
         let ns = error as NSError
-        let text = ns.localizedDescription
-        let short = text.count > 160 ? String(text.prefix(160)) + "…" : text
-        return "\(short) [\(ns.domain) \(ns.code)]"
+        return "\(plainText(error)) [\(ns.domain) \(ns.code)]"
+    }
+
+    /// For the panel: just the message, shortened.
+    static func plainText(_ error: Error) -> String {
+        let text = (error as NSError).localizedDescription
+        return text.count > 160 ? String(text.prefix(160)) + "…" : text
     }
 
     // MARK: storage

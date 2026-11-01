@@ -153,6 +153,58 @@ final class ReauthGateTests: XCTestCase {
         ReauthGate.finish(id, error: nil, now: t0)
     }
 
+    // MARK: status and change notifications (for the UI)
+
+    func testStatusReportsPauseKind() {
+        let paused = freshID(), backoff = freshID()
+        XCTAssertNil(ReauthGate.status(paused, now: t0))
+        fail(paused, ALTAppleAPIError.requiresTwoFactorAuthentication, at: t0)
+        fail(backoff, URLError(.timedOut), at: t0)
+        XCTAssertEqual(ReauthGate.status(paused, now: t0)?.needsUser, true)
+        XCTAssertNil(ReauthGate.status(paused, now: t0)?.until)
+        XCTAssertEqual(ReauthGate.status(backoff, now: t0)?.needsUser, false)
+        XCTAssertEqual(ReauthGate.status(backoff, now: t0)?.until, t0.addingTimeInterval(ReauthGate.baseDelay))
+        XCTAssertNil(ReauthGate.status(backoff, now: t0.addingTimeInterval(ReauthGate.baseDelay)), "an expired backoff is no longer a problem")
+        ReauthGate.clear(paused)
+        XCTAssertNil(ReauthGate.status(paused, now: t0))
+    }
+
+    func testStatusReasonIsPlainText() {
+        let id = freshID()
+        let err = NSError(domain: "SideStepTest", code: 7, userInfo: [NSLocalizedDescriptionKey: "server didn't answer"])
+        fail(id, err, at: t0)
+        let reason = ReauthGate.status(id, now: t0)?.reason ?? ""
+        XCTAssertEqual(reason, "sign-in failed: server didn't answer", "domain/code belong in the log, not the panel")
+    }
+
+    private func expectChange(_ id: String, pauseStarted: Bool) -> XCTestExpectation {
+        expectation(forNotification: ReauthGate.changed, object: nil) { note in
+            (note.userInfo?["appleID"] as? String) == id
+                && (note.userInfo?[ReauthGate.pauseStartedKey] as? Bool) == pauseStarted
+        }
+    }
+
+    func testPauseStartIsAnnouncedOnce() {
+        let id = freshID()
+        let first = expectChange(id, pauseStarted: true)
+        fail(id, ALTAppleAPIError.requiresTwoFactorAuthentication, at: t0)
+        wait(for: [first], timeout: 2)
+        // Ending the pause is announced as a plain change; a new pause after that is a new start.
+        ReauthGate.clear(id)
+        let cleared = expectChange(id, pauseStarted: false)
+        wait(for: [cleared], timeout: 2)
+        let again = expectChange(id, pauseStarted: true)
+        fail(id, ALTAppleAPIError.requiresTwoFactorAuthentication, at: t0)
+        wait(for: [again], timeout: 2)
+    }
+
+    func testBackoffIsAnnouncedWithoutPauseStart() {
+        let id = freshID()
+        let change = expectChange(id, pauseStarted: false)
+        fail(id, URLError(.timedOut), at: t0)
+        wait(for: [change], timeout: 2)
+    }
+
     func testPauseIsStoredInDefaults() {
         let id = freshID()
         fail(id, ALTAppleAPIError.requiresTwoFactorAuthentication, at: t0)
