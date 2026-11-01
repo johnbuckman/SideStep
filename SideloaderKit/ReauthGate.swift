@@ -43,17 +43,31 @@ public enum ReauthGate {
 
     // MARK: attempts
 
+    /// Is automatic sign-in for this Apple ID paused (or already running) right now?
+    /// Reserves nothing — callers use it to skip work that only makes sense with a session
+    /// (anisette fetch, session check) while the account is paused.
+    public static func check(_ appleID: String, now: Date = Date()) -> Verdict {
+        lock.lock(); defer { lock.unlock() }
+        return verdict(appleID, now: now)
+    }
+
     /// Call before an unattended re-login. `.allowed` reserves the attempt for this Apple ID;
     /// the caller must then call `finish(_:error:)` exactly once.
     public static func begin(_ appleID: String, now: Date = Date()) -> Verdict {
         lock.lock(); defer { lock.unlock() }
+        let v = verdict(appleID, now: now)
+        if v == .allowed { inFlight.insert(appleID) }
+        return v
+    }
+
+    /// Caller holds `lock`.
+    private static func verdict(_ appleID: String, now: Date) -> Verdict {
         if inFlight.contains(appleID) { return .blocked("another automatic sign-in is already running") }
         if let e = load()[appleID] {
             guard let until = e.until else { return .blocked("\(e.reason) — open SideStep and sign in again") }
             let left = until - now.timeIntervalSince1970
             if left > 0 { return .blocked("\(e.reason) — next automatic try in \(Int(left / 60) + 1) min") }
         }
-        inFlight.insert(appleID)
         return .allowed
     }
 

@@ -89,6 +89,24 @@ final class ReauthGateTests: XCTestCase {
         ReauthGate.finish(id, error: nil, now: t0)
     }
 
+    func testCheckReservesNothing() {
+        let id = freshID()
+        XCTAssertEqual(ReauthGate.check(id, now: t0), .allowed)
+        XCTAssertEqual(ReauthGate.check(id, now: t0), .allowed, "check must not mark an attempt as running")
+        XCTAssertEqual(ReauthGate.begin(id, now: t0), .allowed)
+        ReauthGate.finish(id, error: nil, now: t0)
+    }
+
+    func testCheckReportsPauseAndRunningAttempt() {
+        let paused = freshID(), running = freshID()
+        fail(paused, ALTAppleAPIError.requiresTwoFactorAuthentication, at: t0)
+        XCTAssertTrue(isBlocked(ReauthGate.check(paused, now: t0)))
+        XCTAssertEqual(ReauthGate.begin(running, now: t0), .allowed)
+        XCTAssertTrue(isBlocked(ReauthGate.check(running, now: t0)))
+        ReauthGate.finish(running, error: nil, now: t0)
+        XCTAssertEqual(ReauthGate.check(running, now: t0), .allowed)
+    }
+
     func testOtherAppleIDsAreNotAffected() {
         let a = freshID(), b = freshID()
         fail(a, ALTAppleAPIError.requiresTwoFactorAuthentication, at: t0)
