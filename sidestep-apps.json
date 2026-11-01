@@ -41,9 +41,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/iwish-icon.png",
       "versions": [
         {
-          "version": "0.2.2",
-          "downloadURL": "https://github.com/johnbuckman/iwish/releases/download/v0.2.2/iWish.ipa",
-          "size": 27481737
+          "version": "0.2.3",
+          "downloadURL": "https://github.com/johnbuckman/iwish/releases/download/v0.2.3/iWish.ipa",
+          "size": 27240296
         }
       ]
     },
