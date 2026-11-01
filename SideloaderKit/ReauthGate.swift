@@ -34,6 +34,8 @@ public enum ReauthGate {
     }
 
     private static let key = "sidestep.reauthGate"
+    /// Where the state lives. Only tests replace this (with a private suite).
+    static var defaults: UserDefaults = .standard
     private static let lock = NSLock()
     private static var inFlight = Set<String>()
     static let baseDelay: TimeInterval = 15 * 60
@@ -120,12 +122,12 @@ public enum ReauthGate {
     // MARK: storage
 
     private static func load() -> [String: Entry] {
-        guard let d = UserDefaults.standard.data(forKey: key),
+        guard let d = defaults.data(forKey: key),
               let m = try? JSONDecoder().decode([String: Entry].self, from: d) else { return [:] }
         return m
     }
     private static func save(_ m: [String: Entry]) {
-        if m.isEmpty { UserDefaults.standard.removeObject(forKey: key); return }
-        if let d = try? JSONEncoder().encode(m) { UserDefaults.standard.set(d, forKey: key) }
+        if m.isEmpty { defaults.removeObject(forKey: key); return }
+        if let d = try? JSONEncoder().encode(m) { defaults.set(d, forKey: key) }
     }
 }
