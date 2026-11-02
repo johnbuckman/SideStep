@@ -10,11 +10,11 @@
   <a href="https://github.com/johnbuckman/SideStep/releases"><b>Download for Mac</b></a> ·
   <a href="https://johnbuckman.github.io/SideStep/">Website</a> ·
   <a href="https://johnbuckman.github.io/SideStep/help.html">The full guide</a> ·
-  <a href="https://youtu.be/MM5PfgjOk8E">Video tour</a>
+  <a href="https://youtu.be/EGJFNGhpnM0">Video tour</a>
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/MM5PfgjOk8E"><img src="docs/screenshots/video-tour.jpg" width="640" alt="Watch the 3-minute SideStep tour on YouTube"></a>
+  <a href="https://youtu.be/EGJFNGhpnM0"><img src="docs/screenshots/video-tour.jpg" width="640" alt="Watch the 3-minute SideStep tour on YouTube"></a>
 </p>
 
 SideStep is a small, free **macOS menu-bar app** that installs iOS apps onto your own iPhone or

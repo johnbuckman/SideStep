@@ -1,7 +1,7 @@
 # SideStep — the complete guide
 
 > The illustrated, always-current guide is **<https://johnbuckman.github.io/SideStep/help.html>**
-> (and a 3-minute video tour: <https://youtu.be/MM5PfgjOk8E>). This file is the same ground in
+> (and a 3-minute video tour: <https://youtu.be/EGJFNGhpnM0>). This file is the same ground in
 > plain Markdown for reading on GitHub.
 
 This guide walks you through everything: what SideStep is, what you need, exactly
