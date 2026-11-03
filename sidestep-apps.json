@@ -116,6 +116,20 @@
           "size": 130570
         }
       ]
+    },
+    {
+      "name": "Decently Fluent",
+      "bundleIdentifier": "com.decentespresso.decentlyfluent",
+      "developerName": "John Buckman",
+      "localizedDescription": "A graded reader. Pick a classic from Project Gutenberg, or open your own EPUB, PDF or text file, and read it rewritten at your level (A1 to C1, or Native) in English, French, German, Spanish or Italian, with your own language beside it when you turn the phone sideways. Where a published human translation exists it is used instead of machine translation. Tap a word for its meaning, double-tap words you don't know and the book brings them back until you've learned them. A research-based guide (Paul Nation's work on learning from reading) recommends books that fit your level. Only the next few pages are rewritten as you read, using your own Claude or DeepSeek API key. Requires iOS 17.",
+      "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decently-fluent-icon.png",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "downloadURL": "https://github.com/johnbuckman/decently-fluent/releases/download/v0.1.0/decently-fluent.ipa",
+          "size": 7593731
+        }
+      ]
     }
   ]
 }
