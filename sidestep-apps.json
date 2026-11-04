@@ -125,9 +125,9 @@
       "iconURL": "https://github.com/johnbuckman/SideStep/releases/download/apps/decently-fluent-icon.png",
       "versions": [
         {
-          "version": "0.1.3",
-          "downloadURL": "https://github.com/johnbuckman/decently-fluent/releases/download/v0.1.3/decently-fluent.ipa",
-          "size": 7398614
+          "version": "0.1.4",
+          "downloadURL": "https://github.com/johnbuckman/decently-fluent/releases/download/v0.1.4/decently-fluent.ipa",
+          "size": 7434622
         }
       ]
     }
