@@ -10,6 +10,7 @@ import ServiceManagement
 import UniformTypeIdentifiers
 import Foundation
 import CoreImage
+import UserNotifications
 
 // In-app refresh scheduler — replaces the external LaunchAgents. Runs while the
 // app is alive in the menu bar: refreshes on device-connect, near expiry, and a daily update sweep
@@ -265,9 +266,64 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var anisetteProblem = Anisette.lastFailure ?? ""
     @Published var anisetteServerHost = Anisette.host(Anisette.serverURL)
     private var anisetteObserver: NSObjectProtocol?
+    // Apple IDs whose automatic (unattended) sign-in is paused by ReauthGate — e.g. Apple asked
+    // for a 2-factor code. Without this the pause is silent and apps just expire after 7 days.
+    @Published var signInProblems: [String: ReauthGate.Status] = [:]
+    private var reauthObserver: NSObjectProtocol?
     init() {
         anisetteObserver = NotificationCenter.default.addObserver(forName: Anisette.problemChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.anisetteProblem = Anisette.lastFailure ?? "" }
+        }
+        // ReauthGate posts asynchronously on the main queue, never under a lock.
+        reauthObserver = NotificationCenter.default.addObserver(forName: ReauthGate.changed, object: nil, queue: nil) { [weak self] note in
+            let id = note.userInfo?["appleID"] as? String ?? ""
+            let started = note.userInfo?[ReauthGate.pauseStartedKey] as? Bool ?? false
+            Task { @MainActor in
+                self?.reloadSignInProblems()
+                if started { self?.notifySignInNeeded(id) }
+            }
+        }
+        reloadSignInProblems()
+    }
+
+    func reloadSignInProblems() {
+        var d: [String: ReauthGate.Status] = [:]
+        for a in accounts { if let s = ReauthGate.status(a.appleID) { d[a.appleID] = s } }
+        signInProblems = d
+    }
+
+    func signInProblemText(_ p: ReauthGate.Status) -> String {
+        if p.needsUser { return "⚠️ Sign-in needed: \(p.reason). Automatic sign-in is paused, so apps from this account won't be renewed." }
+        let mins = max(1, Int(((p.until ?? Date()).timeIntervalSinceNow) / 60) + 1)
+        return "⚠️ Automatic \(p.reason) — next try in \(mins) min"
+    }
+
+    /// Open the in-panel sign-in form for this Apple ID. A successful sign-in ends the pause
+    /// (AccountStore.add clears ReauthGate).
+    func signInAgain(_ id: String) {
+        appleID = id; password = ""; code = ""
+        loginStage = .idle; loginStatus = ""
+        accountsExpanded = true; addingAccount = true
+    }
+
+    /// End a backoff pause and refresh right away.
+    func retrySignInNow(_ id: String) {
+        ReauthGate.clear(id)
+        refreshAllNow()
+    }
+
+    /// One macOS notification when a pause that needs the user begins — the menu-bar panel is
+    /// rarely open, and this is the one case where SideStep can't recover on its own.
+    func notifySignInNeeded(_ id: String) {
+        guard !id.isEmpty, let p = ReauthGate.status(id), p.needsUser else { return }
+        let reason = p.reason
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "SideStep: sign-in needed"
+            content.body = "\(id): \(reason). Open SideStep and sign in again to keep your apps signed."
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "sidestep.signin.\(id)", content: content, trigger: nil))
         }
     }
     // Install progress/result window — so that once an install starts, the user sees a
@@ -1613,6 +1669,16 @@ struct ContentView: View {
                             }.font(.caption2)
                             if acc.teams.count > 1 {
                                 TeamMenu(acc: acc) { m.chooseTeam(acc.appleID, $0) }
+                            }
+                            if let p = m.signInProblems[acc.appleID] {
+                                // Definite width, no .fixedSize: see the loginStatus note below.
+                                Text(m.signInProblemText(p)).font(.caption2)
+                                    .foregroundStyle(p.needsUser ? .red : .orange)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button(p.needsUser ? "Sign In Again" : "Try Now") {
+                                    if p.needsUser { m.signInAgain(acc.appleID) } else { m.retrySignInNow(acc.appleID) }
+                                }
+                                .buttonStyle(.link).font(.caption2).disabled(m.installing)
                             }
                         }
                         Spacer()
