@@ -266,7 +266,8 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     @Published var anisetteServerHost = Anisette.host(Anisette.serverURL)
     private var anisetteObserver: NSObjectProtocol?
     init() {
-        anisetteObserver = NotificationCenter.default.addObserver(forName: Anisette.problemChanged, object: nil, queue: .main) { [weak self] _ in
+        // queue: nil — Anisette posts on the main queue already; the block hops to the main actor itself.
+        anisetteObserver = NotificationCenter.default.addObserver(forName: Anisette.problemChanged, object: nil, queue: nil) { [weak self] _ in
             Task { @MainActor in self?.anisetteProblem = Anisette.lastFailure ?? "" }
         }
     }
@@ -1187,13 +1188,27 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
     func loadAccountInfo() {
         for acc in accounts where acc.teams.isEmpty { refreshTeams(for: acc.appleID) }
     }
+    /// Apple IDs whose team list is being fetched, so repeated panel opens don't pile up fetches.
+    private var teamsRefreshing = Set<String>()
     /// (Re)fetch the list of teams an account belongs to, so the Team menu is populated.
+    /// Everything that can touch the network — including AccountStore.session(for:), which
+    /// fetches anisette — runs off the main thread: this is called from the panel's onAppear,
+    /// and a blocking anisette fetch there froze the panel (offline it never came back).
     func refreshTeams(for appleID: String) {
-        guard let (a, s) = AccountStore.session(for: appleID) else { return }
+        guard !teamsRefreshing.contains(appleID) else { return }
+        teamsRefreshing.insert(appleID)
         Task.detached {
-            let teams = await Sideloader.fetchTeamInfos(account: a, session: s)
-            guard !teams.isEmpty else { return }
-            await MainActor.run { AccountStore.setTeams(appleID, teams); self.accounts = AccountStore.records() }
+            let teams: [TeamInfo]
+            if let (a, s) = AccountStore.session(for: appleID) {
+                teams = await Sideloader.fetchTeamInfos(account: a, session: s)
+            } else {
+                teams = []
+            }
+            await MainActor.run {
+                self.teamsRefreshing.remove(appleID)
+                guard !teams.isEmpty else { return }
+                AccountStore.setTeams(appleID, teams); self.accounts = AccountStore.records()
+            }
         }
     }
     /// User picked which team to sign this account's apps with.
