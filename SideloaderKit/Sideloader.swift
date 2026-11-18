@@ -109,11 +109,13 @@ public enum AccountStore {
         list.append(AccountRecord(dsid: session.dsid, authToken: session.authToken, appleID: account.appleID,
                                   identifier: account.identifier, firstName: account.firstName, lastName: account.lastName))
         write(list)
+        ReauthGate.clear(account.appleID)   // a fresh session ends any pause on automatic sign-in
     }
     public static func remove(_ appleID: String) {
         write(records().filter { $0.appleID != appleID })
         Keychain.clear(appleID)
         CertStore.clear(appleID)
+        ReauthGate.clear(appleID)
     }
     /// Record every team an Apple ID belongs to. Keeps an existing valid choice; auto-picks
     /// when there's exactly one team; leaves the choice empty (so the UI prompts) when there
@@ -1434,21 +1436,48 @@ public struct Sideloader {
 
     /// A WORKING session for this Apple ID: the saved one if it still validates,
     /// otherwise a silent re-login with the Keychain-stored password (so the user
-    /// doesn't have to retype anything). Returns nil only if there's no saved
-    /// account, or if the re-login needs a 2-factor code we can't supply unattended.
+    /// doesn't have to retype anything). Returns nil if there's no saved account,
+    /// or if the re-login fails or is paused by ReauthGate (e.g. it needs a 2-factor code).
     static func ensureSession(_ appleID: String, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
+        // While automatic sign-in is paused the saved session is known to be dead: skip the
+        // anisette fetch and the session check instead of asking Apple again on every call.
+        if case let .blocked(why) = ReauthGate.check(appleID) {
+            log("\(appleID): not signing in automatically — \(why)")
+            return nil
+        }
         guard let pair = AccountStore.session(for: appleID) else { log(AccountStore.sessionFailureReason(for: appleID)); return nil }
         let teams: [ALTTeam]? = try? await cont { ALTAppleAPI.sharedAPI.fetchTeams(for: pair.0, session: pair.1, completionHandler: $0) }
         if teams != nil { return pair }   // saved session still good
-        log("session for \(appleID) expired — signing in again…")
-        guard let pw = Keychain.password(for: appleID) else { log("no saved password for \(appleID)"); return nil }
-        let res: (ALTAccount, ALTAppleAPISession)? = try? await withCheckedThrowingContinuation { c in
-            Anisette.authenticate(appleID: appleID, password: pw,
-                verificationHandler: { submit in submit(nil) },   // unattended: can't satisfy a 2FA prompt
-                completionHandler: { a, s, e in if let a, let s { c.resume(returning: (a, s)) } else { c.resume(throwing: e ?? SideErr.fail("reauth")) } })
+        log("session for \(appleID) expired")
+        return await unattendedReauth(appleID, log: log)
+    }
+
+    /// Silent re-login with the Keychain-stored password, throttled by ReauthGate.
+    /// Never offers a 2-factor code: Apple pushes the code to the trusted devices during the
+    /// sign-in itself, so a re-login that needs 2FA is tried once and then left to the user.
+    static func unattendedReauth(_ appleID: String, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
+        if case let .blocked(why) = ReauthGate.begin(appleID) {
+            log("\(appleID): not signing in automatically — \(why)")
+            return nil
         }
-        if let r = res { AccountStore.add(account: r.0, session: r.1) }
-        return res
+        guard let pw = Keychain.password(for: appleID) else {
+            log("\(appleID): can’t re-authenticate — \(ReauthGate.finish(appleID, error: SideErr.fail("no saved password")))")
+            return nil
+        }
+        log("\(appleID): signing in again with the saved password…")
+        do {
+            let r: (ALTAccount, ALTAppleAPISession) = try await withCheckedThrowingContinuation { c in
+                Anisette.authenticate(appleID: appleID, password: pw,
+                    verificationHandler: nil,   // unattended: nobody can enter a code → .requiresTwoFactorAuthentication
+                    completionHandler: { a, s, e in if let a, let s { c.resume(returning: (a, s)) } else { c.resume(throwing: e ?? SideErr.fail("reauth")) } })
+            }
+            ReauthGate.finish(appleID, error: nil)
+            AccountStore.add(account: r.0, session: r.1)
+            return r
+        } catch {
+            log("\(appleID): can’t re-authenticate — \(ReauthGate.finish(appleID, error: error))")
+            return nil
+        }
     }
 
     /// Install a tracked app (known from any device) onto a DIFFERENT device, from
@@ -1725,20 +1754,24 @@ public struct Sideloader {
         }
 
         for (appleID, apps) in byAccount {
+            // While automatic sign-in is paused the saved session is known to be dead: don't
+            // fetch anisette or check the session with Apple on every refresh tick.
+            if case let .blocked(why) = ReauthGate.check(appleID) {
+                log("\(appleID): not signing in automatically — \(why); skipping its \(apps.count) app(s)")
+                continue
+            }
             guard var pair = AccountStore.session(for: appleID) else { log("\(appleID): \(AccountStore.sessionFailureReason(for: appleID)) — skipping"); continue }
             // validate session; re-auth via keychain if needed
             do { _ = try await cont { ALTAppleAPI.sharedAPI.fetchTeams(for: pair.0, session: pair.1, completionHandler: $0) } }
             catch {
-                log("session for \(appleID) expired — re-authenticating…")
-                if let pw = Keychain.password(for: appleID) {
-                    let res: (ALTAccount, ALTAppleAPISession)? = try? await withCheckedThrowingContinuation { c in
-                        Anisette.authenticate(appleID: appleID, password: pw,
-                            verificationHandler: { submit in submit(nil) },   // unattended: can't satisfy 2FA
-                            completionHandler: { a, s, e in if let a, let s { c.resume(returning: (a, s)) } else { c.resume(throwing: e ?? SideErr.fail("reauth")) } })
-                    }
-                    if let r = res { pair = r; AccountStore.add(account: r.0, session: r.1) }
-                    else if let why = Anisette.lastFailure { log("\(appleID): can’t re-authenticate — \(why)") }
+                log("session for \(appleID) expired")
+                // Without a working session every re-sign below would fail anyway (and hit
+                // Apple's developer services once per app), so skip this account's apps.
+                guard let r = await unattendedReauth(appleID, log: log) else {
+                    log("\(appleID): skipping its \(apps.count) app(s) until sign-in works")
+                    continue
                 }
+                pair = r
             }
             for t in apps {
                 // re-sign only once past 70% of the signing window (2 days left on a 7-day free profile)

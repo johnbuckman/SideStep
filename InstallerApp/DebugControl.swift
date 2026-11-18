@@ -16,6 +16,7 @@ import AppKit
 import Network
 import SwiftUI
 import SideloaderKit
+import AltSign
 
 @MainActor enum DebugControl {
     static let port: UInt16 = 51238
@@ -218,6 +219,20 @@ import SideloaderKit
                 else { return "ERR no tracked app \(arg(1)) \(arg(2))" }
                 return later { what == "refresh" ? m.refreshApp(t) : m.refreshAppEverywhere(t) }
             case "refresh-all": m.refreshAllNow(); return "OK"
+            case "simulate-reauth-pause":   // simulate-reauth-pause <appleID> [2fa|locked|backoff] — records a failed
+                // unattended re-login in ReauthGate without contacting Apple, to test the panel row and notification.
+                let id = arg(1)
+                guard !id.isEmpty else { return "ERR usage: simulate-reauth-pause <appleID> [2fa|locked|backoff]" }
+                let err: Error
+                switch arg(2) {
+                case "locked": err = NSError(domain: ALTUnderlyingAppleAPIErrorDomain, code: -20209,
+                                             userInfo: [NSLocalizedDescriptionKey: "This Apple Account has been locked (simulated)."])
+                case "backoff": err = URLError(.timedOut)
+                default: err = ALTAppleAPIError.requiresTwoFactorAuthentication
+                }
+                guard case .allowed = ReauthGate.begin(id) else { return "ERR \(id) is already paused or signing in" }
+                return "OK " + ReauthGate.finish(id, error: err)
+            case "clear-reauth-pause": ReauthGate.clear(arg(1)); return "OK"
             case "check-updates": m.checkGitHubUpdatesNow(); return "OK"
             case "self-update-check": return later { Task { await UpdateChecker.shared.check(userInitiated: true) } }
             case "token-prompt": return later { m.promptGitHubToken() }
@@ -269,7 +284,7 @@ import SideloaderKit
     close-search-github|github-user <u>|search-altstore [q]|close-search-altstore|load-source <url>|add-source <url>|install-github <repo>|\
     install-source <name>|open-ipa <path>|url <sidestep://…>|refresh <origBundleID> [udid] [appleID]|refresh-everywhere <origBundleID>|\
     refresh-all|check-updates|self-update-check|token-prompt|anisette-prompt|debug-log|devmode-help <device> [manual|rebooting]|\
-    trust-hint <appleID> · SET|TYPE <field> <text> [chars/s] (fields: githubQuery altStoreQuery appleID password code sourceURL alert) · \
+    trust-hint <appleID>|simulate-reauth-pause <appleID> [2fa|locked|backoff]|clear-reauth-pause <appleID> · SET|TYPE <field> <text> [chars/s] (fields: githubQuery altStoreQuery appleID password code sourceURL alert) · \
     CLICK <button title> · CLOSE <window title> · SNAP panel|alert|<title>|<window#> [path] [scale] · DEMO alias <from> <to> | clear | list · \
     DEVICES · DEVICE <udid|bundle|name|any> <beacon command…> (PANEL [close], MORE, UI, PICK <t>, TYPE <t>, SET <t>, ROW <t>, DONE, \
     UPDATE, BEACON, STATE, PING, ALIAS <from>|<to>, ALIAS clear, SNAP [path])

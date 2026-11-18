@@ -158,6 +158,13 @@ let package = Package(
         .executableTarget(
             name: "SideStepInstaller",
             path: "SideStepInstaller"
+        ),
+
+        // Unit tests for SideloaderKit logic that needs no device and no Apple servers.
+        .testTarget(
+            name: "SideloaderKitTests",
+            dependencies: ["SideloaderKit", "AltSign"],
+            path: "Tests/SideloaderKitTests"
         )
     ],
 
