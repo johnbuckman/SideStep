@@ -48,7 +48,11 @@ public enum Anisette {
         get { stateLock.lock(); defer { stateLock.unlock() }; return _lastFailure }
         set {
             stateLock.lock(); let changed = _lastFailure != newValue; _lastFailure = newValue; stateLock.unlock()
-            if changed { NotificationCenter.default.post(name: problemChanged, object: nil) }
+            // Posted asynchronously on purpose: fresh() sets this while holding freshLock. A
+            // synchronous post makes the poster wait for any observer registered on the main
+            // queue — and the main thread may itself be waiting for freshLock in fresh(). That
+            // deadlock froze the menu-bar panel for good on an offline start (0.2.72).
+            if changed { DispatchQueue.main.async { NotificationCenter.default.post(name: problemChanged, object: nil) } }
         }
     }
     private static var _lastFailure: String?
