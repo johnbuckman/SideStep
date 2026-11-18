@@ -138,13 +138,25 @@ func trimSideStepLog(maxAge: TimeInterval = SideStepLogMaxAge) {
                 try? data.write(to: URL(fileURLWithPath: path))
             }
         }
-        // Never pull a huge file into memory — just start fresh.
-        if size > 200 * 1024 * 1024 {
-            rewrite("[\(diagStampFmt.string(from: Date()))] (log truncated — exceeded 200 MB size cap)\n")
-            return
+        // Past the size cap, never pull the whole file into memory: keep only its newest 50 MB
+        // (from the first full line), then age-trim that. Wiping the file outright lost exactly
+        // the lines that explain why it grew (e.g. a sign-in loop with AltSign hex dumps).
+        let sizeCap: UInt64 = 200 * 1024 * 1024, keepTail: UInt64 = 50 * 1024 * 1024
+        let overCap = size > sizeCap
+        var data: Data
+        if overCap {
+            guard let rh = FileHandle(forReadingAtPath: path) else { return }
+            defer { try? rh.close() }
+            try? rh.seek(toOffset: size - keepTail)
+            guard let tail = try? rh.readToEnd() else { return }
+            data = tail.firstIndex(of: 0x0A).map { Data(tail[tail.index(after: $0)...]) } ?? tail
+        } else {
+            guard let d = fm.contents(atPath: path) else { return }
+            data = d
         }
-        guard let data = fm.contents(atPath: path),
-              let text = String(data: data, encoding: .utf8) else { return }
+        // Decoding repairs invalid UTF-8 instead of failing (which used to skip the trim for good).
+        let text = String(decoding: data, as: UTF8.self)
+        data = Data()
         let cutoff = Date().addingTimeInterval(-maxAge)
         let allLines = text.split(separator: "\n", omittingEmptySubsequences: false)
         var kept: [Substring] = []; var keeping = false
@@ -155,7 +167,12 @@ func trimSideStepLog(maxAge: TimeInterval = SideStepLogMaxAge) {
             }
             if keeping { kept.append(line) }
         }
-        if kept.count != allLines.count { rewrite(kept.joined(separator: "\n")) }
+        if overCap {
+            let note = "[\(diagStampFmt.string(from: Date()))] (log exceeded the 200 MB size cap — older lines dropped, newest kept)"
+            rewrite(note + "\n" + kept.joined(separator: "\n"))
+        } else if kept.count != allLines.count {
+            rewrite(kept.joined(separator: "\n"))
+        }
     }
 }
 
