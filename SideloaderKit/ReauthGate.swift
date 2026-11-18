@@ -46,27 +46,30 @@ public enum ReauthGate {
     /// Is automatic sign-in for this Apple ID paused (or already running) right now?
     /// Reserves nothing — callers use it to skip work that only makes sense with a session
     /// (anisette fetch, session check) while the account is paused.
-    public static func check(_ appleID: String, now: Date = Date()) -> Verdict {
+    /// `userInitiated`: the user just asked for this (refresh button, "Install more apps…" on the
+    /// device), so they're present and a network backoff doesn't apply. A pause that needs an
+    /// interactive sign-in, and an attempt already running, still block.
+    public static func check(_ appleID: String, userInitiated: Bool = false, now: Date = Date()) -> Verdict {
         lock.lock(); defer { lock.unlock() }
-        return verdict(appleID, now: now)
+        return verdict(appleID, userInitiated: userInitiated, now: now)
     }
 
     /// Call before an unattended re-login. `.allowed` reserves the attempt for this Apple ID;
     /// the caller must then call `finish(_:error:)` exactly once.
-    public static func begin(_ appleID: String, now: Date = Date()) -> Verdict {
+    public static func begin(_ appleID: String, userInitiated: Bool = false, now: Date = Date()) -> Verdict {
         lock.lock(); defer { lock.unlock() }
-        let v = verdict(appleID, now: now)
+        let v = verdict(appleID, userInitiated: userInitiated, now: now)
         if v == .allowed { inFlight.insert(appleID) }
         return v
     }
 
     /// Caller holds `lock`.
-    private static func verdict(_ appleID: String, now: Date) -> Verdict {
+    private static func verdict(_ appleID: String, userInitiated: Bool, now: Date) -> Verdict {
         if inFlight.contains(appleID) { return .blocked("another automatic sign-in is already running") }
         if let e = load()[appleID] {
             guard let until = e.until else { return .blocked("\(e.reason) — open SideStep and sign in again") }
             let left = until - now.timeIntervalSince1970
-            if left > 0 { return .blocked("\(e.reason) — next automatic try in \(Int(left / 60) + 1) min") }
+            if left > 0, !userInitiated { return .blocked("\(e.reason) — next automatic try in \(Int(left / 60) + 1) min") }
         }
         return .allowed
     }

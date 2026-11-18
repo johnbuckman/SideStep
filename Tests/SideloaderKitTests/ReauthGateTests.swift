@@ -214,4 +214,21 @@ final class ReauthGateTests: XCTestCase {
         let stored = (try? JSONSerialization.jsonObject(with: data ?? Data())) as? [String: Any]
         XCTAssertNotNil(stored?[id], "the pause for this Apple ID must be persisted")
     }
+
+    // MARK: user-started actions
+
+    func testUserInitiatedSkipsBackoffButNotNeedsUserPause() {
+        let backoff = freshID(), locked = freshID()
+        fail(backoff, URLError(.timedOut), at: t0)
+        fail(locked, ALTAppleAPIError.requiresTwoFactorAuthentication, at: t0)
+        let soon = t0.addingTimeInterval(60)
+        XCTAssertTrue(isBlocked(ReauthGate.check(backoff, now: soon)))
+        XCTAssertEqual(ReauthGate.check(backoff, userInitiated: true, now: soon), .allowed)
+        XCTAssertTrue(isBlocked(ReauthGate.check(locked, userInitiated: true, now: soon)))
+        // A user-started attempt still reserves the slot: a second one is refused while it runs.
+        XCTAssertEqual(ReauthGate.begin(backoff, userInitiated: true, now: soon), .allowed)
+        XCTAssertTrue(isBlocked(ReauthGate.begin(backoff, userInitiated: true, now: soon)))
+        ReauthGate.finish(backoff, error: nil, now: soon)
+        XCTAssertNil(ReauthGate.status(backoff, now: soon))
+    }
 }

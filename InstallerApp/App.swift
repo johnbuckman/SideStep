@@ -1333,7 +1333,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
             var ok = 0, fail = 0, last = "", lastErr = ""
             var failLines: [String] = []
             for app in queue {
-                do { last = try await Sideloader.refreshOne(app, log: log, onProgress: onProgress, onInstall: onInstall); ok += 1 }
+                do { last = try await Sideloader.refreshOne(app, userInitiated: true, log: log, onProgress: onProgress, onInstall: onInstall); ok += 1 }
                 catch { fail += 1; lastErr = error.localizedDescription
                         failLines.append("• \(app.name): \(error.localizedDescription)")
                         print("[SideStep] refresh failed for \(app.name): \(error)") }
@@ -1402,7 +1402,7 @@ final class IPAPanelDelegate: NSObject, NSOpenSavePanelDelegate {
                     continue
                 }
                 do {
-                    _ = try await Sideloader.refreshOne(e, log: log, onProgress: onProgress, onInstall: onInstall)
+                    _ = try await Sideloader.refreshOne(e, userInitiated: true, log: log, onProgress: onProgress, onInstall: onInstall)
                     lines.append("• \(dev): updated" + (latest.map { " to \($0)" } ?? ""))
                 } catch {
                     lines.append("• \(dev): \(error.localizedDescription)")

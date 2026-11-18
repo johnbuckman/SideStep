@@ -1438,10 +1438,12 @@ public struct Sideloader {
     /// otherwise a silent re-login with the Keychain-stored password (so the user
     /// doesn't have to retype anything). Returns nil if there's no saved account,
     /// or if the re-login fails or is paused by ReauthGate (e.g. it needs a 2-factor code).
-    static func ensureSession(_ appleID: String, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
+    /// `userInitiated`: the user asked for this action, so a network backoff in ReauthGate is skipped
+    /// (a pause that needs an interactive sign-in still applies).
+    static func ensureSession(_ appleID: String, userInitiated: Bool = false, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
         // While automatic sign-in is paused the saved session is known to be dead: skip the
         // anisette fetch and the session check instead of asking Apple again on every call.
-        if case let .blocked(why) = ReauthGate.check(appleID) {
+        if case let .blocked(why) = ReauthGate.check(appleID, userInitiated: userInitiated) {
             log("\(appleID): not signing in automatically — \(why)")
             return nil
         }
@@ -1449,14 +1451,14 @@ public struct Sideloader {
         let teams: [ALTTeam]? = try? await cont { ALTAppleAPI.sharedAPI.fetchTeams(for: pair.0, session: pair.1, completionHandler: $0) }
         if teams != nil { return pair }   // saved session still good
         log("session for \(appleID) expired")
-        return await unattendedReauth(appleID, log: log)
+        return await unattendedReauth(appleID, userInitiated: userInitiated, log: log)
     }
 
     /// Silent re-login with the Keychain-stored password, throttled by ReauthGate.
     /// Never offers a 2-factor code: Apple pushes the code to the trusted devices during the
     /// sign-in itself, so a re-login that needs 2FA is tried once and then left to the user.
-    static func unattendedReauth(_ appleID: String, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
-        if case let .blocked(why) = ReauthGate.begin(appleID) {
+    static func unattendedReauth(_ appleID: String, userInitiated: Bool = false, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
+        if case let .blocked(why) = ReauthGate.begin(appleID, userInitiated: userInitiated) {
             log("\(appleID): not signing in automatically — \(why)")
             return nil
         }
@@ -1558,10 +1560,10 @@ public struct Sideloader {
         }
     }
 
-    public static func refreshOne(_ t: TrackedApp, log: @escaping (String) -> Void,
+    public static func refreshOne(_ t: TrackedApp, userInitiated: Bool = false, log: @escaping (String) -> Void,
                                   onProgress: @escaping @Sendable (_ received: Int64, _ total: Int64) -> Void = { _, _ in },
                                   onInstall: @escaping @Sendable (_ percent: Int, _ phase: String) -> Void = { _, _ in }) async throws -> String {
-        guard let (account, session) = await ensureSession(t.appleID, log: log) else {
+        guard let (account, session) = await ensureSession(t.appleID, userInitiated: userInitiated, log: log) else {
             if let why = Anisette.lastFailure { throw SideErr.fail(why) }
             throw SideErr.fail("Couldn't sign in to \(t.appleID) automatically. Open SideStep and sign in again — you may just need to enter a texted code.")
         }
