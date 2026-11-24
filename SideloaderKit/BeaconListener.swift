@@ -13,14 +13,17 @@ public final class BeaconListener: NSObject {
     private var source: DispatchSourceRead?
     private var fd: Int32 = -1
     private var advertiser: NetService?
-    private var busy = false
-    private var busyStartedAt = Date.distantPast // when `busy` was set — used to self-heal a wedged install
+    // Updates in flight, keyed by "udid|bundleid" → last time that install showed activity.
+    // Per (device, app), NOT one Mac-wide busy flag: until 0.2.74 a single `busy` bool made every
+    // other app/device that beaconed during an update (incl. a minutes-long cascade) get "Mac is
+    // busy with another update" and give up. Now different keys run concurrently — installs to
+    // the same device still queue in InstallGate.devices — and only a repeat beacon for the SAME
+    // key is collapsed ("Still updating"). All access on `q`.
+    private var inFlight: [String: Date] = [:]
     // Slightly above the 360s per-app withTimeout so a normal (even slow) install never trips it,
     // but a permanently-wedged install (uncancellable Apple-API/URLSession hang that withTimeout
-    // can't actually abandon) can't pin `busy` on forever and lock out every other device.
+    // can't actually abandon) can't pin its key in `inFlight` forever.
     private static let busyStaleAfter: TimeInterval = 420
-    private var currentKey: String? = nil        // the (udid|bundleid) currently installing, if any
-    private var lastActivityAt = Date.distantPast // last time the running install logged progress
     private var lastPush: [String: Date] = [:]   // per (udid|bundleid), debounce the packet burst
     private var log: (String) -> Void = { _ in }
 
@@ -141,33 +144,28 @@ public final class BeaconListener: NSObject {
         }
         let key = "\(udid)|\(bundle)"
         let now = Date()
-        if busy {
+        if let last = inFlight[key] {
             // Self-heal: `withTimeout(360)` can't truly abandon an uncancellable step (a hung
-            // ALTAppleAPI continuation or a stalled URLSession), so the install Task's
-            // busy-reset defer may never run and `busy` would stay pinned for the life of the
-            // process — locking out every device with "Mac is busy…". If busy has been held
-            // past the stale threshold, clear it and service this beacon anyway.
-            if Date().timeIntervalSince(lastActivityAt) > BeaconListener.busyStaleAfter {
-                log("beacon: previous install silent >\(Int(BeaconListener.busyStaleAfter))s — clearing stuck busy flag")
-                busy = false; currentKey = nil
+            // ALTAppleAPI continuation or a stalled URLSession), so the install Task's release
+            // may never run. If this key has been silent past the stale threshold, drop it and
+            // service this beacon anyway.
+            if now.timeIntervalSince(last) > BeaconListener.busyStaleAfter {
+                log("beacon: previous install of \(bundle) silent >\(Int(BeaconListener.busyStaleAfter))s — clearing it")
+                inFlight[key] = nil
                 // fall through and handle this beacon normally
+            } else {
+                // A burst of beacons for the SAME app that's already installing is normal.
+                sendStatus("Still updating — hang on…", to: from); return
             }
-            // A burst of beacons for the SAME app that's already installing is normal —
-            // don't cry "another update". Only a DIFFERENT device/app is really blocked.
-            else if key == currentKey { sendStatus("Still updating — hang on…", to: from); return }
-            else { sendStatus("Mac is busy with another update — hold on…", to: from); return }
         }
-        // (Removed the old 60s "Mac got your request — just a moment…" debounce: it was a
-        // NON-terminal reply that dropped the beacon and did no work, so the device popup hung
-        // on it with no follow-up — especially right after an install, when lastPush is fresh.
-        // A burst of packets is already collapsed by the `busy` flag below — the first packet
-        // flips busy synchronously on this queue, so the rest fall into the busy branch above —
-        // and a genuinely redundant reinstall is short-circuited terminally inside the Task.)
+        // A burst of packets is collapsed by `inFlight`: the first packet claims the key
+        // synchronously on this queue, so the rest hit the branch above. A genuinely redundant
+        // reinstall is short-circuited terminally inside the Task.
         guard let app = Tracked.all().first(where: { $0.udid == udid && $0.installedBundleID == bundle }) else {
             log("beacon from \(ip): no tracked app for \(bundle) on \(udid)"); return
         }
-        busy = true; busyStartedAt = now; lastActivityAt = now; currentKey = key; lastPush[key] = now
-        armBusyWatchdog()   // release `busy` even if this install wedges — see armBusyWatchdog()
+        inFlight[key] = now; lastPush[key] = now
+        armWatchdog(key)   // release the key even if this install wedges — see armWatchdog()
         log("beacon from \(ip): \(bundle) — refreshing over Wi-Fi")
         sendStatus("Mac heard your request…", to: from)
         // Tell the device who is servicing it, so its popup can show "installed by
@@ -175,14 +173,13 @@ public final class BeaconListener: NSObject {
         // wire parser keeps them in one token).
         sendRaw("HOST \(Sideloader.computerName().replacingOccurrences(of: " ", with: "_"))\n", to: from)
         sendRaw("SIGNER \(app.appleID)\n", to: from)
-        setenv("IWISH_IP", ip, 1)   // target the device by the IP the beacon came from
         // Log closure that also forwards numbered step + fine "Now:" detail + upload % + ETA.
         var upStart: Date? = nil
         var lastProg = Date.distantPast
         var lastStep = 0
         let statusLog: (String) -> Void = { [weak self] msg in
             guard let self else { return }
-            self.touchActivity()   // any line = the install is alive; keeps the watchdog from firing
+            self.touchActivity(key)   // any line = the install is alive; keeps the watchdog from firing
             if msg.hasPrefix("PROGRESS ") {
                 let p = msg.split(separator: " ")
                 if p.count >= 3, let sent = Double(p[1]), let total = Double(p[2]), total > 0 {
@@ -212,11 +209,22 @@ public final class BeaconListener: NSObject {
                 self.sendStatus("\(n)/\(BeaconListener.stepTotal)  \(label)", to: from)
             }
         }
-        Task {
-            // Clear the target IP when done so it can't leak into a later manual
-            // Refresh (which must route by the device's live connection type).
-            defer { unsetenv("IWISH_IP") }
-            defer { self.q.async { self.busy = false; self.currentKey = nil; self.lastPush[key] = Date() } }
+        // Target the device by the IP this beacon came from — task-local, so concurrent beacon
+        // installs each keep their own (the old process-wide setenv("IWISH_IP") let one beacon
+        // redirect another's install) and nothing leaks into a later manual Refresh.
+        Task { await Sideloader.$beaconIP.withValue(ip) {
+            var released = false
+            func release() {   // idempotent: free this key (normally right after the main install)
+                guard !released else { return }
+                released = true
+                self.q.async { self.inFlight[key] = nil; self.lastPush[key] = Date() }
+            }
+            defer { release() }
+            // Another app on this same device is installing → ours waits in InstallGate.devices.
+            // Say so rather than leave the popup on "Mac heard your request…".
+            if await InstallGate.deviceBusy(udid) {
+                self.sendStatus("Queued behind another update on this device — starting in a moment…", to: from)
+            }
             do {
                 // Skip the reinstall when the installed signature is still fresh (<24h) and
                 // the app's content hasn't changed — the device beacons on every launch,
@@ -229,12 +237,12 @@ public final class BeaconListener: NSObject {
                     // later beacon (incl. a manual "Update app now") hit the 60s debounce,
                     // stuck on "Mac got your request…". So phrase this as terminal "complete".
                     self.sendStatus("Already up to date — no reinstall needed. Update check complete.", to: from)
-                    return   // defers reset busy + IWISH_IP; device records success and stops
+                    return   // defer releases the key; device records success and stops
                 }
                 // Hard per-app deadline so a wedged step (stuck device install, hung
-                // Apple API call) can never pin `busy` on forever — which is what left
+                // Apple API call) can never pin its key forever — which is what left
                 // the device stuck on "Still updating — hang on…". On timeout this throws,
-                // `busy` is reset by the defer above, and the device retries on its next
+                // the key is released by the defer above, and the device retries on its next
                 // beacon. The subprocess steps inside are separately bounded (ProcessWatchdog).
                 _ = try await Sideloader.withTimeout(360, "Updating \(app.name)") {
                     try await Sideloader.refreshOne(app, log: statusLog)
@@ -257,13 +265,17 @@ public final class BeaconListener: NSObject {
                     self.sendStatus("Update complete — relaunch to apply.", to: from)
                     try? await Task.sleep(nanoseconds: 250_000_000)
                 }
+                // This app is done — free its key now, so its relaunch beacon (or a manual
+                // "Update app now") isn't answered "Still updating" while the cascade runs.
+                release()
                 // Cascade: while we have this device reachable, refresh other apps on it so
                 // rarely-opened apps don't silently expire just because only one app beacons.
                 // (10167702445) But ONLY those actually near expiry — refreshing EVERY sibling
-                // on every beacon meant one "ready" beacon kicked off a full ~10-app reinstall,
-                // pinning `busy` for many minutes and leaving the triggering app's popup stuck
-                // on "Still updating — hang on…" the whole time. Sequential + quiet (no beacon-UI
-                // for the extras); failures (incl. per-app timeout) are logged, not fatal.
+                // on every beacon meant one "ready" beacon kicked off a full ~10-app reinstall.
+                // Sequential + quiet (no beacon-UI for the extras); failures (incl. per-app
+                // timeout) are logged, not fatal. Each sibling claims its own key, so a beacon
+                // from that sibling meanwhile gets "Still updating" instead of a duplicate install,
+                // and a sibling already being updated by its own beacon is skipped here.
                 let cascadeWindow: TimeInterval = 2 * 86400   // refresh siblings due within 2 days
                 let others = Tracked.all().filter {
                     $0.udid == udid && $0.installedBundleID != bundle
@@ -272,41 +284,51 @@ public final class BeaconListener: NSObject {
                 if !others.isEmpty {
                     self.log("beacon cascade: also refreshing \(others.count) other app(s) on \(udid)")
                     for t in others {
-                        do { _ = try await Sideloader.withTimeout(360, "Updating \(t.name)") { try await Sideloader.refreshOne(t, log: { self.touchActivity(); self.log("cascade[\(t.name)]: \($0)") }) } ; self.log("cascade: refreshed \(t.name)") }
+                        let tk = "\(t.udid)|\(t.installedBundleID)"
+                        guard self.claim(tk) else { self.log("cascade: \(t.name) already updating — skipped"); continue }
+                        defer { self.unclaim(tk) }
+                        do { _ = try await Sideloader.withTimeout(360, "Updating \(t.name)") { try await Sideloader.refreshOne(t, log: { self.touchActivity(tk); self.log("cascade[\(t.name)]: \($0)") }) } ; self.log("cascade: refreshed \(t.name)") }
                         catch { self.log("cascade: \(t.name) failed: \(error)") }
                     }
                     self.onInstalled?()   // cascade updated more tracked versions — reload the UI too
                 }
             }
             catch { self.sendStatus("Update failed — will retry later.", to: from); self.log("beacon refresh failed: \(error)") }
-        }
+        } }
     }
 
-    // MARK: busy watchdog
+    // MARK: in-flight keys + watchdog
 
-    /// Time-based backstop for a wedged install. The install Task's `defer { busy = false }`
-    /// runs only if that Task finishes; the beacon-triggered stale check in handle() runs only
-    /// when the NEXT beacon arrives — but the device stops beaconing the moment it's told "Mac is
-    /// busy", so in practice nothing arrives and `busy` stays pinned until SideStep is restarted
-    /// (the reported bug). This self-reschedules while the install keeps logging progress
-    /// (lastActivityAt advances) and force-clears `busy` once the install has been SILENT — no
-    /// log or upload progress — for longer than busyStaleAfter. Distinguishing silence from a
-    /// slow-but-live cascade is why we key off activity, not wall-clock since start.
-    private func armBusyWatchdog() {
+    /// Claim `key` from a Task (never call on `q`). False if it's already being updated.
+    private func claim(_ key: String) -> Bool {
+        q.sync {
+            if let last = inFlight[key], Date().timeIntervalSince(last) <= BeaconListener.busyStaleAfter { return false }
+            inFlight[key] = Date(); return true
+        }
+    }
+    private func unclaim(_ key: String) { q.async { self.inFlight[key] = nil } }
+
+    /// Time-based backstop for a wedged install. The install Task's release runs only if that
+    /// Task finishes; the stale check in handle() runs only when the NEXT beacon for the same key
+    /// arrives — but the device stops beaconing once it's answered, so in practice nothing
+    /// arrives. This self-reschedules while the install keeps logging progress (its activity
+    /// time advances) and drops the key once it has been SILENT for longer than busyStaleAfter.
+    /// Keyed off activity, not wall-clock since start, so a slow-but-live install isn't cut off.
+    private func armWatchdog(_ key: String) {
         q.asyncAfter(deadline: .now() + 30) { [weak self] in
-            guard let self, self.busy else { return }
-            if Date().timeIntervalSince(self.lastActivityAt) > BeaconListener.busyStaleAfter {
-                self.log("beacon: install silent >\(Int(BeaconListener.busyStaleAfter))s — watchdog clearing stuck busy flag")
-                self.busy = false; self.currentKey = nil
+            guard let self, let last = self.inFlight[key] else { return }
+            if Date().timeIntervalSince(last) > BeaconListener.busyStaleAfter {
+                self.log("beacon: install of \(key) silent >\(Int(BeaconListener.busyStaleAfter))s — watchdog releasing it")
+                self.inFlight[key] = nil
             } else {
-                self.armBusyWatchdog()   // still installing and progressing — keep watching
+                self.armWatchdog(key)   // still installing and progressing — keep watching
             }
         }
     }
 
-    /// Mark that the running install just made progress. Hops to `q`, where `busy` and the
-    /// timestamps live, so the log callbacks (which fire off the cooperative pool) stay race-free.
-    private func touchActivity() { q.async { self.lastActivityAt = Date() } }
+    /// Mark that the install for `key` just made progress. Hops to `q`, where `inFlight` lives,
+    /// so the log callbacks (which fire off the cooperative pool) stay race-free.
+    private func touchActivity(_ key: String) { q.async { if self.inFlight[key] != nil { self.inFlight[key] = Date() } } }
 
     // MARK: advertise
 

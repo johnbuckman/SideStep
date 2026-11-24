@@ -333,21 +333,27 @@ extension TrackedApp {
 
 public enum Tracked {
     static let path = SideStepSupportDir + "/tracked.json"
+    /// Serialises read-modify-write of tracked.json: installs to different devices now run in
+    /// parallel, and two unlocked upserts would each drop the other's record.
+    private static let lock = NSRecursiveLock()
     public static func all() -> [TrackedApp] {
         guard let d = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let list = try? JSONDecoder().decode([TrackedApp].self, from: d) else { return [] }
         return list
     }
     static func write(_ list: [TrackedApp]) {
+        lock.lock(); defer { lock.unlock() }
         try? FileManager.default.createDirectory(atPath: SideStepSupportDir, withIntermediateDirectories: true)
         if let d = try? JSONEncoder().encode(list) { try? d.write(to: URL(fileURLWithPath: path)) }
     }
     public static func upsert(_ app: TrackedApp) {
+        lock.lock(); defer { lock.unlock() }
         var list = all().filter { !($0.installedBundleID == app.installedBundleID && $0.udid == app.udid) }
         list.append(app)
         write(list)
     }
     public static func remove(installedBundleID: String, udid: String) {
+        lock.lock(); defer { lock.unlock() }
         write(all().filter { !($0.installedBundleID == installedBundleID && $0.udid == udid) })
     }
 }
@@ -521,29 +527,59 @@ private final class Once: @unchecked Sendable {
     }
 }
 
-/// Process-global async mutex so only ONE device install runs at a time across every caller.
-/// Every install path — the beacon updater (refreshOne), the RefreshDaemon sweep (refreshAll),
-/// manual installs, and the beacon cascade — funnels through `Sideloader.install()`. Without
-/// this gate a user-tapped beacon install and a daemon refresh could hit the SAME device
-/// concurrently, and iOS aborts one with "IXSimpleInstaller canceling existing coordinator
-/// (Coordinator superseded)" — which surfaced on the phone as an endless "Still updating —
-/// hang on…" followed by a failure. FIFO, and each install releases the gate the instant it
-/// finishes, so a user tap waits at most one in-flight app-install (not a whole refreshAll sweep).
-actor InstallGate {
-    static let shared = InstallGate()
-    private var held = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-    func acquire() async {
-        if !held { held = true; return }
-        await withCheckedContinuation { waiters.append($0) }
+/// Keyed async mutexes (FIFO per key) for device installs and Apple-ID work.
+///
+/// `devices` (key = UDID): every install path — the beacon updater (refreshOne), the
+/// RefreshDaemon sweep (refreshAll), manual installs, and the beacon cascade — funnels through
+/// `Sideloader.install()`, which holds its device's gate for the whole install. Two installs to
+/// the SAME device must never overlap: iOS aborts one with "IXSimpleInstaller canceling existing
+/// coordinator (Coordinator superseded)", seen on the phone as an endless "Still updating — hang
+/// on…" then a failure. Different devices DON'T conflict, so they install in parallel. (Until
+/// 0.2.74 this was one process-wide gate, which also queued unrelated devices behind each other.)
+///
+/// `accounts` (key = lowercased Apple ID): the Apple-API phase of an install (session check /
+/// re-login, team, device registration, certificate, App IDs, profiles, the shared per-team
+/// signed-app cache, signing). Two parallel installs on one Apple ID could otherwise both see
+/// "no usable certificate" and each create one — revoking the other's — or both run a re-login.
+/// Lock order is always devices → accounts, so the two can't deadlock.
+actor KeyedGate {
+    private var held: Set<String> = []
+    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    func acquire(_ key: String) async {
+        if !held.contains(key) { held.insert(key); return }
+        await withCheckedContinuation { waiters[key, default: []].append($0) }
     }
-    func release() {
-        if waiters.isEmpty { held = false }
-        else { waiters.removeFirst().resume() }   // hand the gate straight to the next waiter
+    func release(_ key: String) {
+        if var w = waiters[key], !w.isEmpty {
+            let next = w.removeFirst()
+            waiters[key] = w.isEmpty ? nil : w
+            next.resume()   // hand the gate straight to the next waiter for this key
+        } else {
+            held.remove(key)
+        }
     }
+    func isHeld(_ key: String) -> Bool { held.contains(key) }
+}
+
+public enum InstallGate {
+    static let devices = KeyedGate()
+    static let accounts = KeyedGate()
+    static func accountKey(_ appleID: String) -> String { appleID.lowercased() }
+    /// True while some install already holds this device (a new one would queue behind it).
+    public static func deviceBusy(_ udid: String) async -> Bool { await devices.isHeld(udid) }
 }
 
 public struct Sideloader {
+    /// The device IP a beacon came from, scoped to that beacon's install task (and the child /
+    /// unstructured Tasks it spawns, e.g. inside withTimeout). Replaces the old process-wide
+    /// `setenv("IWISH_IP")`, which parallel beacon installs would overwrite for each other.
+    /// install() falls back to the IWISH_IP env var (Provision CLI) and then DeviceIPCache.
+    @TaskLocal public static var beaconIP: String?
+    static func hintIP() -> String? {
+        if let ip = beaconIP, !ip.isEmpty { return ip }
+        return ProcessInfo.processInfo.environment["IWISH_IP"].flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     /// Run an async step under a hard deadline. If `op` doesn't finish in time we throw
     /// `SideErr.timeout`, so a stuck Apple-API/network call can't wedge the beacon updater —
     /// the device just retries on its next beacon. (Blocking subprocess steps are additionally
@@ -1069,10 +1105,21 @@ public struct Sideloader {
                                confirm: @escaping (_ app: String, _ bundleID: String) async -> Bool = { _, _ in true },
                                log: @escaping (String) -> Void,
                                onInstall: @escaping @Sendable (_ percent: Int, _ phase: String) -> Void = { _, _ in }) async throws -> String {
-        // Serialize ALL device installs process-wide (see InstallGate) so the beacon updater and
-        // the RefreshDaemon can never install to the same device at once ("Coordinator superseded").
-        await InstallGate.shared.acquire()
-        defer { Task { await InstallGate.shared.release() } }
+        // One install at a time PER DEVICE (see InstallGate): the beacon updater and the
+        // RefreshDaemon must never install to the same device at once ("Coordinator superseded"),
+        // but different devices proceed in parallel. Then the Apple-ID gate for the Apple-API +
+        // signing phase, released just before the device-install phase.
+        await InstallGate.devices.acquire(iPadUDID)
+        defer { Task { await InstallGate.devices.release(iPadUDID) } }
+        let acctKey = InstallGate.accountKey(account.appleID)
+        await InstallGate.accounts.acquire(acctKey)
+        var acctHeld = true
+        func releaseAccount() {
+            guard acctHeld else { return }
+            acctHeld = false
+            Task { await InstallGate.accounts.release(acctKey) }
+        }
+        defer { releaseAccount() }
         // Anti-piracy screening (before any Apple API work, and before we rewrite the
         // bundle id): refuse known pirate sources/files outright; confirm a known paid app.
         switch Blocklist.shared.screen(appPath: appPath, origin: source) {
@@ -1213,7 +1260,7 @@ public struct Sideloader {
         // Instrument with the wireless self-updater (best-effort) BEFORE signing,
         // so zsign covers the injected dylib. Disable with IWISH_NO_BEACON.
         if ProcessInfo.processInfo.environment["IWISH_NO_BEACON"] == nil {
-            let macIP = localIPv4(facing: ProcessInfo.processInfo.environment["IWISH_IP"])
+            let macIP = localIPv4(facing: hintIP() ?? DeviceIPCache.ip(for: iPadUDID))
             // "how found" + update mode, for the on-device overlay.
             let via: String = github.map { "GitHub — \($0.repo)" }
                 ?? (source.hasPrefix("http") ? "AltStore — \(source)"
@@ -1229,6 +1276,9 @@ public struct Sideloader {
         _ = try await withCheckedThrowingContinuation { (c: CheckedContinuation<Bool, Error>) in
             _ = signer.signApp(at: appCopy, provisioningProfiles: profiles) { ok, e in ok ? c.resume(returning: true) : c.resume(throwing: e ?? SideErr.fail("signApp")) }
         }
+        // Apple-API work, the shared signed-app cache and signing are done — let another install
+        // on this Apple ID (to a different device) start while this one talks to its device.
+        releaseAccount()
         // A USB device with Developer Mode off will reject the install with a
         // cryptic AMFI error — catch it here and tell the user exactly what to do.
         if developerMode(iPadUDID) == .disabled {
@@ -1255,15 +1305,15 @@ public struct Sideloader {
             log("kept signed ipa at \(keep)")
         }
 
-        // Route by the device's ACTUAL connection type — not by whether IWISH_IP
-        // happens to be set. A device present on USB installs over usbmux (no network
+        // Route by the device's ACTUAL connection type — not by whether a beacon IP
+        // happens to be known. A device present on USB installs over usbmux (no network
         // pairing needed, always reliable); only a Wi-Fi-only device needs direct-IP.
-        // (The beacon still sets IWISH_IP so we know the device's IP for the Wi-Fi case.)
+        // (The beacon still hands over its IP — Sideloader.beaconIP — for the Wi-Fi case.)
         let conn = connectedDevices().first(where: { $0.udid == iPadUDID })?.conn
         // On USB we hold a trusted session — use it to switch on the device's
         // "Show when on Wi-Fi" flag so future wireless updates work with no manual step.
         if conn == "usb" { enableWifiSync(iPadUDID, log: log) }
-        let envIP = ProcessInfo.processInfo.environment["IWISH_IP"].flatMap { $0.isEmpty ? nil : $0 }
+        let envIP = hintIP()   // the triggering beacon's IP (task-local), or IWISH_IP from the CLI
         // A manual Refresh has no beacon to hand over the device IP, so fall back to the
         // last IP we learned from this device's beacon — lets a Wi-Fi-only device refresh
         // on demand, not only when it beacons.
@@ -1441,6 +1491,11 @@ public struct Sideloader {
     /// `userInitiated`: the user asked for this action, so a network backoff in ReauthGate is skipped
     /// (a pause that needs an interactive sign-in still applies).
     static func ensureSession(_ appleID: String, userInitiated: Bool = false, log: (String) -> Void) async -> (ALTAccount, ALTAppleAPISession)? {
+        // Parallel installs on one Apple ID must not each run a session check / silent re-login.
+        // (Never called while install() holds this gate, so no self-deadlock.)
+        let key = InstallGate.accountKey(appleID)
+        await InstallGate.accounts.acquire(key)
+        defer { Task { await InstallGate.accounts.release(key) } }
         // While automatic sign-in is paused the saved session is known to be dead: skip the
         // anisette fetch and the session check instead of asking Apple again on every call.
         if case let .blocked(why) = ReauthGate.check(appleID, userInitiated: userInitiated) {
