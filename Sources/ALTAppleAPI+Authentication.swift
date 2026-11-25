@@ -546,7 +546,7 @@ private extension ALTAppleAPI {
 
             let httpHeaders = [
                 "Content-Type": "text/x-xml-plist",
-                "X-MMe-Client-Info": anisetteData.deviceDescription,
+                "X-MMe-Client-Info": anisetteData.clientInfoHeader,
                 "Accept": "text/x-xml-plist",
                 "X-Xcode-Version": ALTAppleAPI.gsaXcodeVersion,
                 "X-Apple-App-Info": "com.apple.gs.xcode.auth",
@@ -589,7 +589,7 @@ private extension ALTAppleAPI {
                         }
                     }
                     if httpStatus != 200 {
-                        print("[SideStep auth] GsService2 answered HTTP \(httpStatus) (\(data.count) bytes)")
+                        print("[SideStep auth] GsService2 answered HTTP \(httpStatus) (\(data.count) bytes): \(String(decoding: data.prefix(300), as: UTF8.self).replacingOccurrences(of: "\n", with: " "))")
                         throw NSError(domain: ALTAppleAPI.gsaHTTPErrorDomain, code: httpStatus,
                                       userInfo: [NSLocalizedDescriptionKey: "Apple’s sign-in server answered HTTP \(httpStatus). Please try again in a moment."])
                     }
@@ -659,7 +659,7 @@ private extension ALTAppleAPI {
             "X-Apple-I-MD-LU": anisetteData.localUserID,
             "X-Apple-I-MD-RINFO": "\(anisetteData.routingInfo)",
             "X-Mme-Device-Id": anisetteData.deviceUniqueIdentifier,
-            "X-MMe-Client-Info": anisetteData.deviceDescription,
+            "X-MMe-Client-Info": anisetteData.clientInfoHeader,
             "X-Apple-I-Client-Time": dateFormatter.string(from: anisetteData.date),
             "X-Apple-Locale": anisetteData.localeHeader,
             "X-Apple-I-TimeZone": anisetteData.timeZone.abbreviation() ?? "PST"

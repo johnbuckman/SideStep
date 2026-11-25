@@ -241,7 +241,10 @@ if let i = args.firstIndex(of: "--source"), i + 1 < args.count {
 // Anisette check: generate Apple's sign-in headers and say where they came from.
 // SIDESTEP_REMOTE_ANISETTE=1 forces the anisette-server path. --try-login then attempts a
 // sign-in for a nonexistent example.com Apple ID: Apple's reply shows whether it accepted
-// the headers (an "account/password" error) or rejected them.
+// the headers (an "account/password" error) or rejected them. Since 2026-11-20 an accepted
+// request answers GsService2 o=init HTTP 200 and then -1 "Unexpected response from IDMS Server"
+// for a made-up account; HTTP 503 means the edge refused the client info (see
+// ALTAnisetteData.appleAcceptedClientInfo). Only a real Apple ID proves a full sign-in.
 if args.contains("--anisette") {
     guard let a = Anisette.fresh() else { errln(">>> FAILED: \(Anisette.lastFailure ?? "?")"); exit(1) }
     print(">>> anisette OK — server \(Anisette.serverURL), forced remote=\(ProcessInfo.processInfo.environment["SIDESTEP_REMOTE_ANISETTE"] == "1")")
@@ -249,7 +252,9 @@ if args.contains("--anisette") {
     print("    device \(a.deviceDescription)")
     if args.contains("--try-login") {
         // Through Anisette.authenticate, so a rejected client identity is retried with the other one.
-        Anisette.authenticate(appleID: "sidestep-anisette-check@example.com", password: "not-a-real-password-123",
+        // SIDESTEP_TRY_LOGIN_ID overrides the test Apple ID (Apple may answer different domains differently).
+        let testID = ProcessInfo.processInfo.environment["SIDESTEP_TRY_LOGIN_ID"].flatMap { $0.isEmpty ? nil : $0 } ?? "sidestep-anisette-check@example.com"
+        Anisette.authenticate(appleID: testID, password: "not-a-real-password-123",
             verificationHandler: { submit in submit(nil) },
             completionHandler: { _, _, e in
                 let ns = e.map { $0 as NSError }

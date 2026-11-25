@@ -28,6 +28,17 @@ public final class ALTAnisetteData: NSObject, NSCopying, NSSecureCoding {
     /// every 2FA request that follows), which costs the whole sign-in (issue #4).
     public var localeHeader: String { String(locale.identifier.prefix { $0 != "@" }) }
 
+    /// X-MMe-Client-Info as Apple accepts it. Use this, never deviceDescription, in Apple request headers.
+    public var clientInfoHeader: String { ALTAnisetteData.appleAcceptedClientInfo(deviceDescription) }
+
+    /// Since 2026-11-20 Apple's GSA edge answers HTTP 503 (a 190-byte "Service Temporarily Unavailable"
+    /// page, before reading the account) to any X-MMe-Client-Info whose OS label is "macOS;". The
+    /// legacy label "Mac OS X;" with the same model/version/build gets through (SideStore #1745,
+    /// iLoader 7364ae6, Poki #549). Rewrites only that label; everything else is left as is.
+    public static func appleAcceptedClientInfo(_ clientInfo: String) -> String {
+        clientInfo.replacingOccurrences(of: "<macOS;", with: "<Mac OS X;")
+    }
+
     // MARK: Init
 
     @objc

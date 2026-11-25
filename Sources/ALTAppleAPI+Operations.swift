@@ -652,7 +652,7 @@ public extension ALTAppleAPI {
             "X-Apple-I-MD-LU": a.localUserID,
             "X-Apple-I-MD-RINFO": "\(a.routingInfo)",
             "X-Mme-Device-Id": a.deviceUniqueIdentifier,
-            "X-MMe-Client-Info": a.deviceDescription,
+            "X-MMe-Client-Info": a.clientInfoHeader,
             "X-Apple-I-Client-Time": dateFormatter.string(from: a.date),
             "X-Apple-Locale": a.localeHeader,
             "X-Apple-I-Locale": a.localeHeader,

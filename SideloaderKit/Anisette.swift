@@ -513,7 +513,7 @@ public enum Anisette {
 
         func appleRequest(_ url: URL, _ info: ClientInfo, _ id: (mdLu: String, deviceID: String)) -> URLRequest {
             var r = URLRequest(url: url)
-            r.setValue(info.clientInfo, forHTTPHeaderField: "X-Mme-Client-Info")
+            r.setValue(ALTAnisetteData.appleAcceptedClientInfo(info.clientInfo), forHTTPHeaderField: "X-Mme-Client-Info")
             r.setValue(info.userAgent, forHTTPHeaderField: "User-Agent")
             r.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
             r.setValue("*/*", forHTTPHeaderField: "Accept")
